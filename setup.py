@@ -319,7 +319,8 @@ def get_common_options(build_ext):
         cuda_include_dirs, cuda_lib_dirs = get_cuda_dirs(build_ext, cpp_flags)
     else:
         have_cuda = False
-        cuda_include_dirs = cuda_lib_dirs = []
+        cuda_include_dirs, cuda_lib_dirs = get_cuda_dirs(build_ext, cpp_flags)
+        #cuda_include_dirs = cuda_lib_dirs = []
 
     if gpu_allreduce == 'NCCL':
         have_nccl = True
@@ -327,7 +328,9 @@ def get_common_options(build_ext):
             build_ext, cuda_include_dirs, cuda_lib_dirs, cpp_flags)
     else:
         have_nccl = False
-        nccl_include_dirs = nccl_lib_dirs = []
+        nccl_include_dirs, nccl_lib_dirs = get_nccl_dirs(
+            build_ext, cuda_include_dirs, cuda_lib_dirs, cpp_flags)
+        #nccl_include_dirs = nccl_lib_dirs = []
 
     MACROS = []
     INCLUDES = []
@@ -339,16 +342,25 @@ def get_common_options(build_ext):
 
     if have_cuda:
         MACROS += [('HAVE_CUDA', '1')]
-        INCLUDES += cuda_include_dirs
-        LIBRARY_DIRS += cuda_lib_dirs
-        LIBRARIES += ['cudart']
+        #INCLUDES += cuda_include_dirs
+        #LIBRARY_DIRS += cuda_lib_dirs
+        #LIBRARIES += ['cudart']
+        #LIBRARIES += ['nvToolsExt']
+    INCLUDES += cuda_include_dirs
+    LIBRARY_DIRS += cuda_lib_dirs
+    LIBRARIES += ['cudart']
+    LIBRARIES += ['nvToolsExt']
 
     if have_nccl:
         MACROS += [('HAVE_NCCL', '1')]
-        INCLUDES += nccl_include_dirs
-        LINK_FLAGS += ['-Wl,--version-script=hide_nccl.lds']
-        LIBRARY_DIRS += nccl_lib_dirs
-        LIBRARIES += ['nccl_static']
+        #INCLUDES += nccl_include_dirs
+        #LINK_FLAGS += ['-Wl,--version-script=hide_nccl.lds']
+        #LIBRARY_DIRS += nccl_lib_dirs
+        #LIBRARIES += ['nccl_static']
+    INCLUDES += nccl_include_dirs
+    LINK_FLAGS += ['-Wl,--version-script=hide_nccl.lds']
+    LIBRARY_DIRS += nccl_lib_dirs
+    LIBRARIES += ['nccl_static']
 
     if gpu_allreduce:
         MACROS += [('HOROVOD_GPU_ALLREDUCE', "'%s'" % gpu_allreduce[0])]

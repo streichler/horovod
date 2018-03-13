@@ -37,6 +37,8 @@
 #include "operations.h"
 #include "timeline.h"
 
+#include "macros.h"
+
 /*
  * Allreduce, Allgather and Broadcast Ops.
  *
@@ -658,6 +660,7 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
   }
 
   // On GPU data readiness is signalled by ready_event.
+  PUSH_RANGE("horovod: WAIT FOR DATA", 3)
   std::vector<TensorTableEntry> waiting_tensors;
   for (auto it = entries.begin(); it != entries.end(); it++) {
     if (it->ready_event != nullptr) {
@@ -682,6 +685,7 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
       timeline.ActivityEnd(it->tensor_name);
     }
   }
+  POP_RANGE
 
   Status status;
   if (response.response_type() == MPIResponse::ALLGATHER) {
@@ -757,7 +761,13 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
       // Ensure stream is in the map before executing reduction.
       cudaStream_t& stream = horovod_global.streams[first_entry.device];
       if (stream == nullptr) {
+#ifdef USE_PRIORITY
+        int greatestPriority;
+        cudaDeviceGetStreamPriorityRange(NULL, &greatestPriority);
+        cudaStreamCreateWithPriority(&stream, cudaStreamNonBlocking, greatestPriority);
+#else
         CUDA_CHECK(entries, "cudaStreamCreate", cudaStreamCreate(&stream))
+#endif
       }
     }
 #endif
@@ -876,6 +886,8 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
                                     queue_end_event, after_memcpy_in_event,
                                     after_reduce_event, after_memcpy_out_event,
                                     response, &timeline] {
+        PUSH_RANGE("horovod: NCCL ALLREDUCE", 4)
+
         CUDA_CHECK(entries, "cudaSetDevice", cudaSetDevice(first_entry.device))
         if (queue_end_event != nullptr) {
           CUDA_CHECK(entries, "cudaEventSynchronize",
@@ -922,12 +934,14 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
           it->callback(Status::OK());
         }
         RELEASE_EVENT(entries, done_event);
+        POP_RANGE
       });
       finalizer_thread.detach();
       return;
     }
 #endif
 
+    PUSH_RANGE("horovod: CPU ALLREDUCE", 4)
     if (entries.size() > 1) {
       // Access the fusion buffer.
       auto& buffer = horovod_global.tensor_fusion_buffers[std::make_tuple(
@@ -970,12 +984,14 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
       for (auto it = entries.begin(); it != entries.end(); it++) {
         num_elements += it->tensor->shape().num_elements();
       }
+      PUSH_RANGE("horovod: CPU ALLREDUCE MPI FUSED", 5)
       MPI_CHECK(entries, "MPI_Allreduce",
                 MPI_Allreduce(MPI_IN_PLACE, (void*)buffer_data,
                               (int)num_elements,
                               GetMPIDataType(first_entry.tensor), MPI_SUM,
                               MPI_COMM_WORLD))
       ACTIVITY_END_ALL(entries, timeline)
+      POP_RANGE
 
       // Copy memory out of the fusion buffer.
       ACTIVITY_START_ALL(entries, timeline, "MEMCPY_OUT_FUSION_BUFFER")
@@ -1008,6 +1024,7 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
 #endif
       ACTIVITY_END_ALL(entries, timeline)
     } else {
+      PUSH_RANGE("horovod: CPU ALLREDUCE MPI SINGLE", 5)
       auto e = first_entry;
       ACTIVITY_START_ALL(entries, timeline, "MPI_ALLREDUCE")
       const void* sendbuf = e.tensor->data() == e.output->data()
@@ -1019,12 +1036,16 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
                               GetMPIDataType(e.tensor), MPI_SUM,
                               MPI_COMM_WORLD))
       ACTIVITY_END_ALL(entries, timeline)
+      POP_RANGE
     }
 
     for (auto it = entries.begin(); it != entries.end(); it++) {
       timeline.End(it->tensor_name, it->output);
       it->callback(Status::OK());
     }
+
+    POP_RANGE
+
   } else if (response.response_type() == MPIResponse::BROADCAST) {
     assert(entries.size() == 1);
     auto e = entries[0];
@@ -1354,6 +1375,7 @@ void BackgroundThreadLoop(HorovodGlobalState& state) {
         // the same operation.
         PerformOperation(state.tensor_table, response);
       }
+
 
       // Notify all nodes that we are done with the reductions for this tick.
       MPIResponse done_response;
