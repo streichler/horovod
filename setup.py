@@ -386,7 +386,8 @@ def build_common_extension(build_ext, options, abi_compile_flags):
     common_mpi_lib.sources = options['SOURCES'] + ['horovod/common/common.cc',
                                                    'horovod/common/mpi_message.cc',
                                                    'horovod/common/operations.cc',
-                                                   'horovod/common/timeline.cc']
+                                                   'horovod/common/timeline.cc',
+                                                   'horovod/common/hybrid_allreduce.cc']
     common_mpi_lib.extra_compile_args = options['COMPILE_FLAGS'] + abi_compile_flags
     common_mpi_lib.extra_link_args = options['LINK_FLAGS']
     common_mpi_lib.library_dirs = options['LIBRARY_DIRS']
