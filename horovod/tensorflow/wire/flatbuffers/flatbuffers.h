@@ -833,7 +833,7 @@ FLATBUFFERS_FINAL_CLASS
     // Ignoring this assert may appear to work in simple cases, but the reason
     // it is here is that storing objects in-line may cause vtable offsets
     // to not fit anymore. It also leads to vtable duplication.
-    assert(!nested);
+    //assert(!nested);
   }
 
   // From generated code (or from the parser), we call StartTable/EndTable
@@ -849,7 +849,7 @@ FLATBUFFERS_FINAL_CLASS
   // resulting vtable offset.
   uoffset_t EndTable(uoffset_t start, voffset_t numfields) {
     // If you get this assert, a corresponding StartTable wasn't called.
-    assert(nested);
+    //assert(nested);
     // Write the vtable offset, which is the start of any Table.
     // We fill it's value later.
     auto vtableoffsetloc = PushElement<soffset_t>(0);
@@ -1022,7 +1022,7 @@ FLATBUFFERS_FINAL_CLASS
 
   /// @cond FLATBUFFERS_INTERNAL
   uoffset_t EndVector(size_t len) {
-    assert(nested);  // Hit if no corresponding StartVector.
+    //assert(nested);  // Hit if no corresponding StartVector.
     nested = false;
     return PushElement(static_cast<uoffset_t>(len));
   }

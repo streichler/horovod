@@ -46,7 +46,7 @@ def check_tf_version():
 
 def get_cpp_flags(build_ext):
     last_err = None
-    default_flags = ['-std=c++11', '-fPIC', '-O2']
+    default_flags = ['-std=c++11', '-fPIC', '-O0', '-ggdb', '-UNDEBUG']
     if sys.platform == 'darwin':
         # Darwin most likely will have Clang, which has libc++.
         flags_to_try = [default_flags + ['-stdlib=libc++'], default_flags]
@@ -346,6 +346,7 @@ def fully_define_extension(build_ext):
         INCLUDES += cuda_include_dirs
         LIBRARY_DIRS += cuda_lib_dirs
         LIBRARIES += ['cudart']
+        LIBRARIES += ['nvToolsExt']
 
     if have_nccl:
         MACROS += [('HAVE_NCCL', '1')]
