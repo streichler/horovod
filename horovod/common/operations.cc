@@ -337,7 +337,12 @@ MPIResponse ConstructMPIResponse(std::unique_ptr<MessageTable>& message_table,
                            << MPIRequest::RequestType_Name(message_type)
                            << " a rank-zero tensor.";
     } else {
+#ifdef DEVICES_LIST_IS_BROKEN_ANYWAY
       tensor_sizes[requests[0].request_rank()] = tensor_shape.dim_size(0);
+#else
+      error = true;
+      error_message_stream << "Non-scalar allgathers not currently supported.";
+#endif
     }
 
     for (unsigned int i = 1; i < requests.size(); i++) {
@@ -422,10 +427,12 @@ MPIResponse ConstructMPIResponse(std::unique_ptr<MessageTable>& message_table,
       break;
     }
   }
+#ifdef DEVICES_LIST_IS_BROKEN_ANYWAY
   std::vector<int32_t> devices(requests.size());
   for (auto it = requests.begin(); it != requests.end(); it++) {
     devices[it->request_rank()] = it->device();
   }
+#endif
 
   MPIResponse response;
   response.add_tensor_names(name);
@@ -443,7 +450,9 @@ MPIResponse ConstructMPIResponse(std::unique_ptr<MessageTable>& message_table,
   } else if (message_type == MPIRequest::BROADCAST) {
     response.set_response_type(MPIResponse::BROADCAST);
   }
+#ifdef DEVICES_LIST_IS_BROKEN_ANYWAY
   response.set_devices(devices);
+#endif
 
   // Clear all queued up requests for this name. They are now taken care of
   // by the constructed MPI response.
@@ -1642,6 +1651,7 @@ void EnqueueTensorAllreduce(std::shared_ptr<OpContext> context,
   message.set_request_rank(rank);
   message.set_tensor_name(name);
   message.set_tensor_type(tensor->dtype());
+  message.set_root_rank(0);
   message.set_device(device);
   message.set_request_type(MPIRequest::ALLREDUCE);
   for (int i = 0; i < tensor->shape().dims(); i++) {
@@ -1676,6 +1686,7 @@ void EnqueueTensorAllgather(std::shared_ptr<OpContext> context,
   message.set_request_rank(rank);
   message.set_tensor_name(name);
   message.set_tensor_type(tensor->dtype());
+  message.set_root_rank(0);
   message.set_device(device);
   message.set_request_type(MPIRequest::ALLGATHER);
   for (int i = 0; i < tensor->shape().dims(); i++) {
