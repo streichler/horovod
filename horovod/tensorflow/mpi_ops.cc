@@ -1491,9 +1491,39 @@ void BackgroundThreadLoop(HorovodGlobalState& state) {
       // of messages is equal to the number of processes. Initialize to
       // one since the coordinator is effectively done.
       int completed_ranks = 1;
+
+      std::vector<bool> completed(size, false);
+      completed[0] = true;
+
       while (completed_ranks != size) {
         MPI_Status status;
-        MPI_Probe(MPI_ANY_SOURCE, TAG_NOTIFY, MPI_COMM_WORLD, &status);
+        //MPI_Probe(MPI_ANY_SOURCE, TAG_NOTIFY, MPI_COMM_WORLD, &status);
+        auto start = std::chrono::steady_clock::now();
+
+        while (true) {
+          int proceed = 0;
+          MPI_Iprobe(MPI_ANY_SOURCE, TAG_NOTIFY, MPI_COMM_WORLD, &proceed, &status);
+          if (proceed) break;
+
+          if (std::chrono::steady_clock::now() - start > STALL_WARNING_TIME) {
+            std::cerr << " MPI_PROBE is STALLED!:";
+            std::cerr << " [stalled host:local rank:global rank:";
+            for (int i = 0; i < state.size; i++){
+              if (i == 0) {
+                std::cerr << " ";
+              }
+
+              if (not completed[i]) {
+                std::cerr << state.hostlist[i].data() << ":" ;
+                std::cerr << state.local_rank_list[i] << ":" ;
+                std::cerr << i << ", " ;
+              }
+            }
+            std::cerr << "]" << std::endl;
+
+            start = std::chrono::steady_clock::now();
+          } 
+        }
 
         // Find number of characters in message (including zero byte).
         int source_rank = status.MPI_SOURCE;
@@ -1505,6 +1535,8 @@ void BackgroundThreadLoop(HorovodGlobalState& state) {
           completed_ranks++;
           MPI_Recv(NULL, 0, MPI_BYTE, source_rank, TAG_NOTIFY, MPI_COMM_WORLD,
                    &status);
+
+          completed[source_rank] = true;
           continue;
         }
 
@@ -1608,7 +1640,10 @@ void BackgroundThreadLoop(HorovodGlobalState& state) {
     } else {
       // Notify the coordinator that this node is done sending messages.
       // A DONE message is encoded as a zero-length message.
-      MPI_Send(NULL, 0, MPI_BYTE, RANK_ZERO, TAG_NOTIFY, MPI_COMM_WORLD);
+      //MPI_Send(NULL, 0, MPI_BYTE, RANK_ZERO, TAG_NOTIFY, MPI_COMM_WORLD);
+      bool sent_done_message = false;
+      MPI_Ssend(NULL, 0, MPI_BYTE, RANK_ZERO, TAG_NOTIFY, MPI_COMM_WORLD);
+      sent_done_message = true;
 
       // Receive names for tensors to reduce from rank zero.
       // Once we receive a empty DONE message, stop waiting for more names.
