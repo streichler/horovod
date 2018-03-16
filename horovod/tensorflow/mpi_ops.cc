@@ -339,18 +339,18 @@ struct HorovodGlobalState {
 #endif
 
   HorovodGlobalState() {
-    std::cerr << "Constructing HorovodGlobalState, pid: " << getpid() << std::endl;
+    //std::cerr << "Constructing HorovodGlobalState, pid: " << getpid() << std::endl;
   }
   
   ~HorovodGlobalState() {
     // Make sure that the destructor of the background thread is safe to
     // call. If a thread is still joinable (not detached or complete) its
     // destructor cannot be called.
-    std::cerr << "Destroying HorovodGlobalState, pid: " << getpid() << std::endl;
+    //std::cerr << "Destroying HorovodGlobalState, pid: " << getpid() << std::endl;
     if (background_thread.joinable()) {
       shut_down = true;
       background_thread.join();
-      MPI_Finalize();
+      //MPI_Finalize();
     }
   }
 };
@@ -1475,7 +1475,7 @@ void CheckForStalledTensors(HorovodGlobalState& state) {
 void BackgroundThreadLoop(HorovodGlobalState& state) {
   // Initialize MPI. This must happen on the background thread, since not all
   // MPI implementations support being called from multiple threads.
-  //MPI_Init(NULL, NULL);
+  MPI_Init(NULL, NULL);
 
   // Get MPI rank to determine if we are rank zero.
   int rank;
@@ -1761,7 +1761,7 @@ void BackgroundThreadLoop(HorovodGlobalState& state) {
   //    ncclCommDestroy(it->second);
   //  }
   //#endif
-  //MPI_Finalize();
+  MPI_Finalize();
 }
 
 // Start Horovod background thread. Ensure that this is
@@ -1769,8 +1769,8 @@ void BackgroundThreadLoop(HorovodGlobalState& state) {
 void InitializeHorovodOnce() {
   // Ensure background thread is only started once.
   if (!horovod_global.initialize_flag.test_and_set()) {
-    int provided;
-    MPI_Init_thread(NULL, NULL, MPI_THREAD_SERIALIZED, &provided);
+    //int provided;
+    //MPI_Init_thread(NULL, NULL, MPI_THREAD_SERIALIZED, &provided);
     horovod_global.background_thread =
         std::thread(BackgroundThreadLoop, std::ref(horovod_global));
   }
