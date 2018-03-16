@@ -14,6 +14,9 @@
 // limitations under the License.
 // =============================================================================
 
+#define USE_NVTX
+#define USE_HYBRID_ALLREDUCE
+
 #include <queue>
 #include <thread>
 #include <unordered_map>
@@ -31,6 +34,11 @@
 
 #if HAVE_NCCL
 #include <nccl.h>
+
+#ifdef USE_HYBRID_ALLREDUCE
+#include "hybrid_allreduce.h"
+#endif
+
 #endif
 
 #define OMPI_SKIP_MPICXX
@@ -39,129 +47,10 @@
 #include "mpi_message.h"
 #include "timeline.h"
 
-#define USE_NVTX
-#include "macros.h"
 #include "stdio.h"
-
 #include "unistd.h"
 
-// hybridAllReduce functions 
-void hybridAllReduce(const float* sbuf, float* rbuf, size_t count, ncclComm_t nccl_local_comm, 
-  cudaStream_t stream, float* rbuf_h, MPI_Comm local_comm, MPI_Comm node_comm, int lrank, int nsize)
-{
-
-  /* AllReduce on node */
-  NCCLCHECK(ncclAllReduce(sbuf, rbuf, count, ncclFloat, ncclSum, nccl_local_comm, stream));
-
-  if (nsize > 1)
-  {
-    size_t blockcount = count/4;
-
-    /* Intranode allreduce using local rank 0,1,3,4*/
-    if (lrank == 0 or lrank == 1 or lrank == 3 or lrank == 4) 
-    {
-      size_t shift = 0;
-      if (lrank == 1) shift = 1;
-      else if (lrank == 3) shift = 2;
-      else if (lrank == 4) shift = 3;
-
-      CUDACHECK(cudaMemcpyAsync(rbuf_h, &rbuf[shift * blockcount], ((lrank == 4) ? blockcount + count%blockcount : blockcount)*sizeof(float), 
-                  cudaMemcpyDeviceToHost, stream));
-      cudaStreamSynchronize(stream);
-
-      PUSH_RANGE("MPI_Allreduce", 0)
-      MPI_Allreduce(MPI_IN_PLACE, rbuf_h, ((lrank == 4) ? blockcount + count%blockcount : blockcount), MPI_FLOAT, MPI_SUM, node_comm);
-      POP_RANGE
-
-      CUDACHECK(cudaMemcpyAsync(&rbuf[shift * blockcount], rbuf_h, ((lrank == 4) ? blockcount + count%blockcount : blockcount)*sizeof(float), 
-                  cudaMemcpyHostToDevice, stream));
-      //cudaStreamSynchronize(stream);
-    }
-
-    //MPI_Barrier(local_comm);
-    //MPI_Barrier(node_comm);
-
-    /* Bcast on node */
-    NCCLCHECK(ncclBcast(rbuf, blockcount, ncclFloat, 0, nccl_local_comm, stream));
-    NCCLCHECK(ncclBcast(&rbuf[1 * blockcount], blockcount, ncclFloat, 1, nccl_local_comm, stream));
-    NCCLCHECK(ncclBcast(&rbuf[2 * blockcount], blockcount, ncclFloat, 3, nccl_local_comm, stream));
-    NCCLCHECK(ncclBcast(&rbuf[3 * blockcount], blockcount + count%blockcount, ncclFloat, 4, nccl_local_comm, stream));
-  }
-}
-
-void hybridAllReduce_2split(const float* sbuf, float* rbuf, size_t count, ncclComm_t nccl_local_comm, 
-  cudaStream_t stream, float* rbuf_h, MPI_Comm local_comm, MPI_Comm node_comm, int lrank, int nsize)
-{
-
-  /* AllReduce on node */
-  NCCLCHECK(ncclAllReduce(sbuf, rbuf, count, ncclFloat, ncclSum, nccl_local_comm, stream));
-
-  if (nsize > 1)
-  {
-    size_t blockcount = count/2;
-
-    /* Intranode allreduce using local rank 0,3*/
-    if (lrank == 0  or lrank == 3) 
-    {
-      size_t shift = 0;
-      if (lrank == 3) shift = 1;
-
-      CUDACHECK(cudaMemcpyAsync(rbuf_h, &rbuf[shift * blockcount], ((lrank == 3) ? blockcount + count%blockcount : blockcount)*sizeof(float), 
-                  cudaMemcpyDeviceToHost, stream));
-      cudaStreamSynchronize(stream);
-
-      PUSH_RANGE("MPI_Allreduce", 0)
-      MPI_Allreduce(MPI_IN_PLACE, rbuf_h, ((lrank == 3) ? blockcount + count%blockcount : blockcount), MPI_FLOAT, MPI_SUM, node_comm);
-      POP_RANGE
-
-      CUDACHECK(cudaMemcpyAsync(&rbuf[shift * blockcount], rbuf_h, ((lrank == 3) ? blockcount + count%blockcount : blockcount)*sizeof(float), 
-                  cudaMemcpyHostToDevice, stream));
-      //cudaStreamSynchronize(stream);
-    }
-
-    //MPI_Barrier(local_comm);
-    //MPI_Barrier(node_comm);
-
-    /* Bcast on node */
-    NCCLCHECK(ncclBcast(rbuf, blockcount, ncclFloat, 0, nccl_local_comm, stream));
-    NCCLCHECK(ncclBcast(&rbuf[1 * blockcount], blockcount + count%blockcount, ncclFloat, 3, nccl_local_comm, stream));
-  }
-}
-
-void hybridAllReduce_nosplit(const float* sbuf, float* rbuf, size_t count, ncclComm_t nccl_local_comm, 
-  cudaStream_t stream, float* rbuf_h, MPI_Comm local_comm, MPI_Comm node_comm, int lrank, int nsize, int rank)
-{
-  /* AllReduce on node */
-  NCCLCHECK(ncclAllReduce(sbuf, rbuf, count, ncclFloat, ncclSum, nccl_local_comm, stream));
-
-  if (nsize > 1)
-  {
-    size_t blockcount = count;
-
-    /* Intranode allreduce using local rank 0*/
-    if (lrank == 0) 
-    {
-
-      CUDACHECK(cudaMemcpyAsync(rbuf_h, rbuf,  blockcount*sizeof(float), cudaMemcpyDeviceToHost, stream));
-      cudaStreamSynchronize(stream);
-
-      PUSH_RANGE("MPI_Allreduce", 0)
-      //std::cerr << "CALL MPI_Allreduce : " << rank << std::endl;
-      MPI_Allreduce(MPI_IN_PLACE, rbuf_h, blockcount, MPI_FLOAT, MPI_SUM, node_comm);
-      //std::cerr << "AFTER MPI_Allreduce : " << rank << std::endl;
-      POP_RANGE
-
-      CUDACHECK(cudaMemcpyAsync(rbuf, rbuf_h, blockcount*sizeof(float), cudaMemcpyHostToDevice, stream));
-      cudaStreamSynchronize(stream);
-    }
-
-    MPI_Barrier(local_comm);
-    //MPI_Barrier(node_comm);
-
-    /* Bcast on node */
-    NCCLCHECK(ncclBcast(rbuf, count, ncclFloat, 0, nccl_local_comm, stream));
-  }
-}
+#include "macros.h"
 
 /*
  * Allreduce, Allgather and Broadcast Ops for TensorFlow.
@@ -291,7 +180,9 @@ struct HorovodGlobalState {
   // Memory buffers for Tensor Fusion.  They are keyed off device ID, and all
   // are allocated tensor_fusion_threshold bytes if initialized.
   std::unordered_map<int, PersistentTensor*> tensor_fusion_buffers;
+#ifdef USE_HYBRID_ALLREDUCE
   std::unordered_map<int, float*> tensor_fusion_buffers_h;
+#endif
 
   // Whether MPI_Init has been completed on the background thread.
   bool initialization_done = false;
@@ -299,16 +190,19 @@ struct HorovodGlobalState {
   // The MPI rank, local rank, size, and local size.
   int rank = 0;
   int local_rank = 0;
-  int node_rank = 0;
   int size = 1;
   int local_size = 1;
-  int node_size = 1;
 
+#ifdef USE_HYBRID_ALLREDUCE
+  int node_size = 1;
+  int node_rank = 0;
   MPI_Comm local_comm;
   MPI_Comm node_comm;
+#endif
 
   std::array<char, MPI_MAX_PROCESSOR_NAME> hostname;
   std::vector<std::array<char, MPI_MAX_PROCESSOR_NAME>> hostlist;
+  std::vector<int> local_rank_list;
 
 // The CUDA stream used for data transfers and within-allreduce operations.
 // A naive implementation would use the TensorFlow StreamExecutor CUDA
@@ -341,7 +235,7 @@ struct HorovodGlobalState {
   HorovodGlobalState() {
     //std::cerr << "Constructing HorovodGlobalState, pid: " << getpid() << std::endl;
   }
-  
+
   ~HorovodGlobalState() {
     // Make sure that the destructor of the background thread is safe to
     // call. If a thread is still joinable (not detached or complete) its
@@ -842,16 +736,17 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
     }
   }
 
+#ifdef USE_HYBRID_ALLREDUCE
   // Allocate pinned host buffer, regardless of entries.size()
   if (entries.size() > 0) {
     auto first_entry = entries[0];
     auto& buffer_h = horovod_global.tensor_fusion_buffers_h[first_entry.device];
     if (buffer_h == nullptr) {
-      if (horovod_global.rank == 0) printf("rank 0: allocating pinned buffer on host!!!!\n");
-      //CUDACHECK(cudaMallocHost(buffer_h, horovod_global.tensor_fusion_threshold));
-      cudaMallocHost(&buffer_h, horovod_global.tensor_fusion_threshold);
+      if (horovod_global.rank == 0) printf("Allocating pinned buffers on host...\n");
+      CUDACHECK(cudaMallocHost(&buffer_h, horovod_global.tensor_fusion_threshold));
     }
   }
+#endif
 
 #if HAVE_CUDA
   // On GPU data readiness is signalled by ready_event.
@@ -995,8 +890,8 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
         ACTIVITY_START_ALL(entries, timeline, "INIT_NCCL")
 
         ncclUniqueId nccl_id;
-#if 0
-        printf("Creating global NCCL communicator...\n");
+#ifndef USE_HYBRID_ALLREDUCE
+        if (horovod_global.rank == 0) printf("Using NCCL allreduce, creating global NCCL communicator...\n");
         if (horovod_global.rank == 0) {
           NCCL_CHECK(entries, "ncclGetUniqueId", ncclGetUniqueId(&nccl_id))
         }
@@ -1011,7 +906,8 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
                                     horovod_global.rank))
         nccl_comm = new_nccl_comm;
 #else
-        if (horovod_global.rank == 0) printf("rank 0: Creating node local NCCL communicator...\n");
+        if (horovod_global.rank == 0) printf("Using HYBRID allreduce, creating node local NCCL communicators...\n");
+
         // Replacing global nccl communicator with node local communicator
         if (horovod_global.local_rank == 0) {
           NCCL_CHECK(entries, "ncclGetUniqueId", ncclGetUniqueId(&nccl_id))
@@ -1063,9 +959,6 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
                 ->tensor_data()
                 .data();
 
-        auto buffer_data_h =
-            horovod_global.tensor_fusion_buffers_h[first_entry.device];
-
         // Copy memory into the fusion buffer.
         size_t offset = 0;
         for (auto it = entries.begin(); it != entries.end(); it++) {
@@ -1087,17 +980,19 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
           num_elements += it->tensor.NumElements();
         }
 
-#if 0
+#ifndef USE_HYBRID_ALLREDUCE
         NCCL_CHECK(entries, "ncclAllReduce",
                    ncclAllReduce((const void*)buffer_data, (void*)buffer_data,
                                  num_elements, dtype, ncclSum, nccl_comm,
                                  stream))
 #else
+        // Access host fusion buffer
+        auto buffer_data_h =
+            horovod_global.tensor_fusion_buffers_h[first_entry.device];
 
-        //printf("Calling hybridAllReduce on fused buffer...\n");
-        hybridAllReduce_nosplit((const float*)buffer_data, (float*)buffer_data, num_elements, nccl_comm, 
-          stream, (float*)buffer_data_h, horovod_global.local_comm, horovod_global.node_comm, 
-          horovod_global.local_rank, horovod_global.node_size, horovod_global.rank);
+        hybridAllReduce_nosplit((const float*)buffer_data, (float*)buffer_data, num_elements, nccl_comm,
+          stream, (float*)buffer_data_h, horovod_global.local_comm, horovod_global.node_comm,
+          horovod_global.local_rank, horovod_global.node_size);
 #endif
 
         if (timeline.Initialized()) {
@@ -1119,7 +1014,7 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
         }
       } else {
         auto e = first_entry;
-#if 0
+#ifndef USE_HYBRID_ALLREDUCE
         NCCL_CHECK(entries, "ncclAllReduce",
                    ncclAllReduce((const void*)e.tensor.tensor_data().data(),
                                  (void*)e.output->tensor_data().data(),
@@ -1129,10 +1024,9 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
         auto buffer_data_h =
             horovod_global.tensor_fusion_buffers_h[e.device];
 
-        //printf("Calling hybridAllReduce on single tensor...\n");
-        hybridAllReduce_nosplit((const float*)e.tensor.tensor_data().data(), (float*)e.output->tensor_data().data(), 
-          (size_t)e.tensor.NumElements(), nccl_comm, stream, (float*)buffer_data_h, 
-          horovod_global.local_comm, horovod_global.node_comm, horovod_global.local_rank, horovod_global.node_size, horovod_global.rank);
+        hybridAllReduce_nosplit((const float*)e.tensor.tensor_data().data(), (float*)e.output->tensor_data().data(),
+          (size_t)e.tensor.NumElements(), nccl_comm, stream, (float*)buffer_data_h,
+          horovod_global.local_comm, horovod_global.node_comm, horovod_global.local_rank, horovod_global.node_size);
 #endif
         if (timeline.Initialized()) {
           RECORD_EVENT(entries, after_reduce_event, stream)
@@ -1405,14 +1299,17 @@ void CheckForStalledTensors(HorovodGlobalState& state) {
       //  std::cerr << msg_iter->request_rank();
       //}
       //std::cerr << "]";
-      std::cerr << " [stalled host:global rank:";
+      std::cerr << " [stalled host:local rank:global rank:";
       for (int i = 0; i < state.size; i++){
         if (i==0) {
           std::cerr << " ";
         }
 
-        if (not ready[i])
-          std::cerr << state.hostlist[i].data() << ": " << i << ", ";
+        if (not ready[i]) {
+          std::cerr << state.hostlist[i].data() << ":" ;
+          std::cerr << state.local_rank_list[i] << ":" ;
+          std::cerr << i << ", " ;
+        }
       }
       std::cerr << "]";
     }
@@ -1490,12 +1387,11 @@ void BackgroundThreadLoop(HorovodGlobalState& state) {
   MPI_Comm local_comm;
   MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, rank, MPI_INFO_NULL,
                       &local_comm);
-  //MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL,
-  //                    &local_comm);
   int local_rank, local_size;
   MPI_Comm_rank(local_comm, &local_rank);
   MPI_Comm_size(local_comm, &local_size);
 
+#ifdef USE_HYBRID_ALLREDUCE
   // Create intranode MPI communicator (connecting local ranks)
   MPI_Comm node_comm;
   MPI_Comm_split(MPI_COMM_WORLD, local_rank, rank, &node_comm);
@@ -1503,25 +1399,29 @@ void BackgroundThreadLoop(HorovodGlobalState& state) {
   MPI_Comm_size(node_comm, &node_size);
   MPI_Comm_rank(node_comm, &node_rank);
 
+  state.node_size = node_size;
+  state.node_rank = node_rank;
+  state.local_comm = local_comm;
+  state.node_comm = node_comm;
+#endif
+
   int len;
-  MPI_Get_processor_name(state.hostname.data(), &len); 
+  MPI_Get_processor_name(state.hostname.data(), &len);
 
-  if (rank == 0)
+  if (rank == 0) {
     state.hostlist.resize(size);
+    state.local_rank_list.resize(size);
+  }
 
-  MPI_Gather(state.hostname.data(), MPI_MAX_PROCESSOR_NAME, MPI_CHAR, state.hostlist.data(), 
+  MPI_Gather(state.hostname.data(), MPI_MAX_PROCESSOR_NAME, MPI_CHAR, state.hostlist.data(),
              MPI_MAX_PROCESSOR_NAME, MPI_CHAR, 0, MPI_COMM_WORLD);
+  MPI_Gather(&local_rank, 1, MPI_INT, state.local_rank_list.data(),
+             1, MPI_INT, 0, MPI_COMM_WORLD);
 
   state.rank = rank;
   state.local_rank = local_rank;
-  state.node_rank = node_rank;
   state.size = size;
   state.local_size = local_size;
-  state.node_size = node_size;
-
-  state.local_comm = local_comm;
-  state.node_comm = node_comm;
-
   state.initialization_done = true;
 
   // Open the timeline file on coordinator.

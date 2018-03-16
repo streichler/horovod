@@ -321,7 +321,8 @@ def fully_define_extension(build_ext):
         cuda_include_dirs, cuda_lib_dirs = get_cuda_dirs(build_ext, cpp_flags)
     else:
         have_cuda = False
-        cuda_include_dirs = cuda_lib_dirs = []
+        cuda_include_dirs, cuda_lib_dirs = get_cuda_dirs(build_ext, cpp_flags)
+        #cuda_include_dirs = cuda_lib_dirs = []
 
     if gpu_allreduce == 'NCCL':
         have_nccl = True
@@ -329,13 +330,16 @@ def fully_define_extension(build_ext):
             build_ext, cuda_include_dirs, cuda_lib_dirs, cpp_flags)
     else:
         have_nccl = False
-        nccl_include_dirs = nccl_lib_dirs = []
+        nccl_include_dirs, nccl_lib_dirs = get_nccl_dirs(
+            build_ext, cuda_include_dirs, cuda_lib_dirs, cpp_flags)
+        #nccl_include_dirs = nccl_lib_dirs = []
 
     MACROS = []
     INCLUDES = []
     SOURCES = ['horovod/tensorflow/mpi_message.cc',
                'horovod/tensorflow/mpi_ops.cc',
-               'horovod/tensorflow/timeline.cc']
+               'horovod/tensorflow/timeline.cc',
+               'horovod/tensorflow/hybrid_allreduce.cc']
     COMPILE_FLAGS = cpp_flags + shlex.split(mpi_flags) + tf_compile_flags
     LINK_FLAGS = shlex.split(mpi_flags) + tf_link_flags
     LIBRARY_DIRS = []
@@ -343,16 +347,23 @@ def fully_define_extension(build_ext):
 
     if have_cuda:
         MACROS += [('HAVE_CUDA', '1')]
-        INCLUDES += cuda_include_dirs
-        LIBRARY_DIRS += cuda_lib_dirs
-        LIBRARIES += ['cudart']
-        LIBRARIES += ['nvToolsExt']
+        #INCLUDES += cuda_include_dirs
+        #LIBRARY_DIRS += cuda_lib_dirs
+        #LIBRARIES += ['cudart']
+        #LIBRARIES += ['nvToolsExt']
+    INCLUDES += cuda_include_dirs
+    LIBRARY_DIRS += cuda_lib_dirs
+    LIBRARIES += ['cudart']
+    LIBRARIES += ['nvToolsExt']
 
     if have_nccl:
         MACROS += [('HAVE_NCCL', '1')]
-        INCLUDES += nccl_include_dirs
-        LIBRARY_DIRS += nccl_lib_dirs
-        LIBRARIES += ['nccl']
+        #INCLUDES += nccl_include_dirs
+        #LIBRARY_DIRS += nccl_lib_dirs
+        #LIBRARIES += ['nccl']
+    INCLUDES += nccl_include_dirs
+    LIBRARY_DIRS += nccl_lib_dirs
+    LIBRARIES += ['nccl']
 
     if gpu_allreduce:
         MACROS += [('HOROVOD_GPU_ALLREDUCE', "'%s'" % gpu_allreduce[0])]
