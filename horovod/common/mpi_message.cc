@@ -130,16 +130,19 @@ void MPIRequest_ParseFromWire(MPIRequest& request,
 void MPIRequest_SerializeToWire(const MPIRequest& request,
                                 flatbuffers::FlatBufferBuilder& builder,
                                 flatbuffers::Offset<wire::MPIRequest>& obj) {
+  // have to build vectors and strings before we create the RequestBuilder
+  //  itself
+  auto name = builder.CreateString(request.tensor_name());
+  auto shape = builder.CreateVector(request.tensor_shape());
   wire::MPIRequestBuilder request_builder(builder);
   request_builder.add_request_rank(request.request_rank());
   request_builder.add_request_type(
       (wire::MPIRequestType)request.request_type());
   request_builder.add_tensor_type((wire::MPIDataType)request.tensor_type());
-  request_builder.add_tensor_name(builder.CreateString(request.tensor_name()));
+  request_builder.add_tensor_name(name);
   request_builder.add_root_rank(request.root_rank());
   request_builder.add_device(request.device());
-  request_builder.add_tensor_shape(
-      builder.CreateVector(request.tensor_shape()));
+  request_builder.add_tensor_shape(shape);
   obj = request_builder.Finish();
 }
 
@@ -188,7 +191,7 @@ void MPIRequestList::ParseFromString(MPIRequestList& request_list,
 void MPIRequestList::SerializeToString(MPIRequestList& request_list,
                                        std::string& output) {
   flatbuffers::FlatBufferBuilder builder(1024);
-  wire::MPIRequestListBuilder request_list_builder(builder);
+  // make sure to construct things in a bottom-up fashion...
   std::vector<flatbuffers::Offset<wire::MPIRequest>> requests;
   for (auto it = request_list.requests().begin();
        it != request_list.requests().end(); it++) {
@@ -196,7 +199,9 @@ void MPIRequestList::SerializeToString(MPIRequestList& request_list,
     MPIRequest_SerializeToWire(*it, builder, req_obj);
     requests.push_back(req_obj);
   }
-  request_list_builder.add_requests(builder.CreateVector(requests));
+  auto reqs = builder.CreateVector(requests);
+  wire::MPIRequestListBuilder request_list_builder(builder);
+  request_list_builder.add_requests(reqs);
   auto obj = request_list_builder.Finish();
   builder.Finish(obj);
 
@@ -295,16 +300,19 @@ void MPIResponse::ParseFromString(MPIResponse& response,
 void MPIResponse::SerializeToString(MPIResponse& response,
                                     std::string& output) {
   flatbuffers::FlatBufferBuilder builder(1024);
+  // have to build vectors and strings before we create the ResponseBuilder
+  //  itself
+  auto names = builder.CreateVectorOfStrings(response.tensor_names());
+  auto errmsg = builder.CreateString(response.error_message());
+  auto devices = builder.CreateVector(response.devices());
+  auto sizes = builder.CreateVector(response.tensor_sizes());
   wire::MPIResponseBuilder response_builder(builder);
   response_builder.add_response_type(
       (wire::MPIResponseType)response.response_type());
-  response_builder.add_tensor_names(
-      builder.CreateVectorOfStrings(response.tensor_names()));
-  response_builder.add_error_message(
-      builder.CreateString(response.error_message()));
-  response_builder.add_devices(builder.CreateVector(response.devices()));
-  response_builder.add_tensor_sizes(
-      builder.CreateVector(response.tensor_sizes()));
+  response_builder.add_tensor_names(names);
+  response_builder.add_error_message(errmsg);
+  response_builder.add_devices(devices);
+  response_builder.add_tensor_sizes(sizes);
   auto obj = response_builder.Finish();
   builder.Finish(obj);
 
