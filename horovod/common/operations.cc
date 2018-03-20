@@ -179,6 +179,10 @@ struct HorovodGlobalState {
   MPI_Comm node_comm;
 #endif
 
+  std::array<char, MPI_MAX_PROCESSOR_NAME> hostname;
+  std::vector<std::array<char, MPI_MAX_PROCESSOR_NAME>> hostlist;
+  std::vector<int> local_rank_list;
+
 // The CUDA stream used for data transfers and within-allreduce operations.
 // A naive implementation would use the TensorFlow StreamExecutor CUDA
 // stream. However, the allreduce and allgather require doing memory copies
@@ -1153,6 +1157,7 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
 // some ranks but not others and are waiting for long time to get processed.
 void CheckForStalledTensors(HorovodGlobalState& state) {
   bool preamble = false;
+  std::vector<bool> ready(state.size, false);
   auto now = std::chrono::steady_clock::now();
   for (auto it = state.message_table->begin(); it != state.message_table->end();
        it++) {
@@ -1178,15 +1183,28 @@ void CheckForStalledTensors(HorovodGlobalState& state) {
         std::cerr << ", ";
       }
       std::cerr << tensor_name;
-      std::cerr << " [ready ranks:";
-      for (auto msg_iter = messages.begin(); msg_iter != messages.end();
-           msg_iter++) {
-        if (msg_iter == messages.begin()) {
+      //std::cerr << " [ready ranks:";
+      //for (auto msg_iter = messages.begin(); msg_iter != messages.end();
+      //     msg_iter++) {
+      //  if (msg_iter == messages.begin()) {
+      //    std::cerr << " ";
+      //  } else {
+      //    std::cerr << ", ";
+      //  }
+      //  std::cerr << msg_iter->request_rank();
+      //}
+      //std::cerr << "]";
+      std::cerr << " [stalled host:local rank:global rank:";
+      for (int i = 0; i < state.size; i++){
+        if (i == 0) {
           std::cerr << " ";
-        } else {
-          std::cerr << ", ";
         }
-        std::cerr << msg_iter->request_rank();
+
+        if (not ready[i]) {
+          std::cerr << state.hostlist[i].data() << ":" ;
+          std::cerr << state.local_rank_list[i] << ":" ;
+          std::cerr << i << ", " ;
+        }
       }
       std::cerr << "]";
     }
@@ -1273,7 +1291,7 @@ void BackgroundThreadLoop(HorovodGlobalState& state) {
   MPI_Comm_size(local_comm, &local_size);
 
 #ifdef USE_HYBRID_ALLREDUCE
-  // Create internode MPI communicator (connecting local ranks)
+  // Create intranode MPI communicator (connecting local ranks)
   MPI_Comm node_comm;
   MPI_Comm_split(MPI_COMM_WORLD, local_rank, rank, &node_comm);
   int node_rank, node_size;
@@ -1285,6 +1303,19 @@ void BackgroundThreadLoop(HorovodGlobalState& state) {
   state.local_comm = local_comm;
   state.node_comm = node_comm;
 #endif
+
+  int len;
+  MPI_Get_processor_name(state.hostname.data(), &len);
+
+  if (rank == 0) {
+    state.hostlist.resize(size);
+    state.local_rank_list.resize(size);
+  }
+
+  MPI_Gather(state.hostname.data(), MPI_MAX_PROCESSOR_NAME, MPI_CHAR, state.hostlist.data(),
+             MPI_MAX_PROCESSOR_NAME, MPI_CHAR, 0, MPI_COMM_WORLD);
+  MPI_Gather(&local_rank, 1, MPI_INT, state.local_rank_list.data(),
+             1, MPI_INT, 0, MPI_COMM_WORLD);
 
   state.rank = rank;
   state.local_rank = local_rank;

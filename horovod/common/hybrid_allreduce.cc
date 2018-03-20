@@ -16,7 +16,7 @@ void hybridAllReduce(const float* sbuf, float* rbuf, size_t count, ncclComm_t nc
   {
     size_t blockcount = count/4;
 
-    /* Internode AllReduce using local ranks 0,1,3,4*/
+    /* Intranode AllReduce using local ranks 0,1,3,4*/
     if (lrank == 0 or lrank == 1 or lrank == 3 or lrank == 4)
     {
       size_t shift = 0;
@@ -58,7 +58,7 @@ void hybridAllReduce_2split(const float* sbuf, float* rbuf, size_t count, ncclCo
   {
     size_t blockcount = count/2;
 
-    /* Internode AllReduce using local rank 0,3*/
+    /* Intranode AllReduce using local rank 0,3*/
     if (lrank == 0  or lrank == 3)
     {
       size_t shift = 0;
@@ -96,7 +96,7 @@ void hybridAllReduce_nosplit(const float* sbuf, float* rbuf, size_t count, ncclC
   {
     size_t blockcount = count;
 
-    /* Internode AllReduce using local rank 0*/
+    /* Intranode AllReduce using local rank 0*/
     if (lrank == 0)
     {
 
