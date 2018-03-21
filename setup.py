@@ -170,8 +170,11 @@ def get_tf_flags(build_ext, cpp_flags):
 def get_mpi_flags():
     show_command = os.environ.get('HOROVOD_MPICXX_SHOW', 'mpicxx -show')
     try:
-        mpi_show_output = subprocess.check_output(
-            shlex.split(show_command), universal_newlines=True).strip()
+        #mpi_show_output = subprocess.check_output(
+        #    shlex.split(show_command), universal_newlines=True).strip()
+        #mpi_show_args = shlex.split(mpi_show_output)
+        proc = subprocess.Popen(shlex.split(show_command), env=dict(os.environ), stdout=subprocess.PIPE)
+        mpi_show_output = proc.communicate()[0]
         mpi_show_args = shlex.split(mpi_show_output)
         if not mpi_show_args[0].startswith('-'):
             # Open MPI and MPICH print compiler name as a first word, skip it
