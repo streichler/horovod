@@ -14,8 +14,8 @@
 // limitations under the License.
 // =============================================================================
 
-#define USE_NVTX
-#define USE_HYBRID_ALLREDUCE
+//#define USE_NVTX
+//#define USE_HYBRID_ALLREDUCE
 
 #include <assert.h>
 #include <atomic>
@@ -1232,6 +1232,9 @@ static void ConstructControlTree(int my_rank, int total_ranks,
   if (horovod_control_radix != nullptr) {
     radix = std::atol(horovod_control_radix);
   }
+  if (my_rank == 0) {
+    std::cout << "Using hierarchical control plane, radix = " << radix << std::endl;
+  }
   // a value of 0 requests a completely flat tree
   if(radix == 0)
     radix = total_ranks - 1;
@@ -1404,6 +1407,10 @@ void BackgroundThreadLoop(HorovodGlobalState& state) {
     state.tensor_fusion_threshold = std::atol(horovod_fusion_threshold);
   }
 
+  if (rank == 0) {
+    std::cout << "Using HOROVOD_FUSION_THRESHOLD = " << state.tensor_fusion_threshold << std::endl;
+  }
+
   // each rank finds its place in the tree, remembering the rank of the
   //  parent and any children
   int parent_rank;
@@ -1415,8 +1422,8 @@ void BackgroundThreadLoop(HorovodGlobalState& state) {
   state.message_table = std::unique_ptr<MessageTable>(new MessageTable());
 
   // allocate buffers for the Irecv's we post for parent and child nodes
-  const size_t MAX_UPSTREAM_MESSAGE_SIZE = 65536;
-  const size_t MAX_DOWNSTREAM_MESSAGE_SIZE = 65536;
+  const size_t MAX_UPSTREAM_MESSAGE_SIZE = 10*65536;
+  const size_t MAX_DOWNSTREAM_MESSAGE_SIZE = 10*65536;
 
   char *parent_send_buffer = new char[MAX_UPSTREAM_MESSAGE_SIZE];
   char *parent_recv_buffer = new char[MAX_DOWNSTREAM_MESSAGE_SIZE];

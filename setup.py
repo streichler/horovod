@@ -319,8 +319,7 @@ def get_common_options(build_ext):
         cuda_include_dirs, cuda_lib_dirs = get_cuda_dirs(build_ext, cpp_flags)
     else:
         have_cuda = False
-        cuda_include_dirs, cuda_lib_dirs = get_cuda_dirs(build_ext, cpp_flags)
-        #cuda_include_dirs = cuda_lib_dirs = []
+        cuda_include_dirs = cuda_lib_dirs = []
 
     if gpu_allreduce == 'NCCL':
         have_nccl = True
@@ -328,9 +327,7 @@ def get_common_options(build_ext):
             build_ext, cuda_include_dirs, cuda_lib_dirs, cpp_flags)
     else:
         have_nccl = False
-        nccl_include_dirs, nccl_lib_dirs = get_nccl_dirs(
-            build_ext, cuda_include_dirs, cuda_lib_dirs, cpp_flags)
-        #nccl_include_dirs = nccl_lib_dirs = []
+        nccl_include_dirs = nccl_lib_dirs = []
 
     MACROS = []
     INCLUDES = []
@@ -342,25 +339,19 @@ def get_common_options(build_ext):
 
     if have_cuda:
         MACROS += [('HAVE_CUDA', '1')]
-        #INCLUDES += cuda_include_dirs
-        #LIBRARY_DIRS += cuda_lib_dirs
-        #LIBRARIES += ['cudart']
-        #LIBRARIES += ['nvToolsExt']
-    INCLUDES += cuda_include_dirs
-    LIBRARY_DIRS += cuda_lib_dirs
-    LIBRARIES += ['cudart']
-    LIBRARIES += ['nvToolsExt']
+        INCLUDES += cuda_include_dirs
+        LIBRARY_DIRS += cuda_lib_dirs
+        LIBRARIES += ['cudart']
+        LIBRARIES += ['nvToolsExt']
 
     if have_nccl:
         MACROS += [('HAVE_NCCL', '1')]
-        #INCLUDES += nccl_include_dirs
-        #LINK_FLAGS += ['-Wl,--version-script=hide_nccl.lds']
-        #LIBRARY_DIRS += nccl_lib_dirs
-        #LIBRARIES += ['nccl_static']
-    INCLUDES += nccl_include_dirs
-    LINK_FLAGS += ['-Wl,--version-script=hide_nccl.lds']
-    LIBRARY_DIRS += nccl_lib_dirs
-    LIBRARIES += ['nccl_static']
+        MACROS += [('USE_HYBRID_ALLREDUCE', '1')]
+        INCLUDES += nccl_include_dirs
+        LINK_FLAGS += ['-Wl,--version-script=hide_nccl.lds']
+        LIBRARY_DIRS += nccl_lib_dirs
+        LIBRARIES += ['nccl_static']
+        SOURCES += ['horovod/common/hybrid_allreduce.cc']
 
     if gpu_allreduce:
         MACROS += [('HOROVOD_GPU_ALLREDUCE', "'%s'" % gpu_allreduce[0])]
@@ -386,8 +377,7 @@ def build_common_extension(build_ext, options, abi_compile_flags):
     common_mpi_lib.sources = options['SOURCES'] + ['horovod/common/common.cc',
                                                    'horovod/common/mpi_message.cc',
                                                    'horovod/common/operations.cc',
-                                                   'horovod/common/timeline.cc',
-                                                   'horovod/common/hybrid_allreduce.cc']
+                                                   'horovod/common/timeline.cc']
     common_mpi_lib.extra_compile_args = options['COMPILE_FLAGS'] + abi_compile_flags
     common_mpi_lib.extra_link_args = options['LINK_FLAGS']
     common_mpi_lib.library_dirs = options['LIBRARY_DIRS']

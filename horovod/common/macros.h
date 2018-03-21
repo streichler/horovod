@@ -1,17 +1,11 @@
 #include "stdio.h"
 #include "stdlib.h"
 
+#if HAVE_CUDA
 #include "cuda_runtime.h"
-#include "nccl.h"
 
-#define CUDACHECK(cmd) do {                         \
-  cudaError_t e = cmd;                              \
-  if( e != cudaSuccess ) {                          \
-    printf("Cuda failure %s:%d '%s'\n",             \
-        __FILE__,__LINE__,cudaGetErrorString(e));   \
-    exit(EXIT_FAILURE);                             \
-  }                                                 \
-} while(0)
+#if HAVE_NCCL
+#include "nccl.h"
 
 #define NCCLCHECK(cmd) do {                         \
   ncclResult_t r = cmd;                             \
@@ -21,6 +15,18 @@
     exit(EXIT_FAILURE);                             \
   }                                                 \
 } while(0)
+#endif
+
+#define CUDACHECK(cmd) do {                         \
+  cudaError_t e = cmd;                              \
+  if( e != cudaSuccess ) {                          \
+    printf("Cuda failure %s:%d '%s'\n",             \
+        __FILE__,__LINE__,cudaGetErrorString(e));   \
+    exit(EXIT_FAILURE);                             \
+  }                                                 \
+} while(0)
+#endif
+
 
 #ifdef USE_NVTX
 #include "nvToolsExt.h"
