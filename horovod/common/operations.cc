@@ -17,6 +17,8 @@
 //#define USE_NVTX
 //#define USE_HYBRID_ALLREDUCE
 
+#define NSOCKETS 2
+
 #include <assert.h>
 #include <atomic>
 #include <cstring>
@@ -177,6 +179,13 @@ struct HorovodGlobalState {
   int node_rank = 0;
   MPI_Comm local_comm;
   MPI_Comm node_comm;
+
+  int local_size_socket = 1;
+  int local_rank_socket = 0;
+  int node_size_socket = 1;
+  int node_rank_socket = 0;
+  MPI_Comm local_comm_socket;
+  MPI_Comm node_comm_socket;
 #endif
 
   std::array<char, MPI_MAX_PROCESSOR_NAME> hostname;
@@ -696,11 +705,15 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
   // Allocate pinned host fusion buffer, regardless of entries.size()
   if (entries.size() > 0) {
     auto first_entry = entries[0];
-    auto& buffer_h = horovod_global.tensor_fusion_buffers_h[std::make_tuple(
-        first_entry.device, first_entry.context->framework())];
-    if (buffer_h == nullptr) {
-      if (horovod_global.rank == 0) printf("Allocating pinned buffers on host...\n");
-      CUDACHECK(cudaMallocHost(&buffer_h, horovod_global.tensor_fusion_threshold));
+    bool on_gpu = first_entry.device != CPU_DEVICE_ID;
+    if (on_gpu)
+    { 
+      auto& buffer_h = horovod_global.tensor_fusion_buffers_h[std::make_tuple(
+          first_entry.device, first_entry.context->framework())];
+      if (buffer_h == nullptr) {
+        if (horovod_global.rank == 0) printf("Allocating pinned buffers on host...\n");
+        CUDACHECK(cudaMallocHost(&buffer_h, horovod_global.tensor_fusion_threshold));
+      }
     }
   }
 #endif
@@ -916,7 +929,7 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
         auto buffer_data_h = horovod_global.tensor_fusion_buffers_h[std::make_tuple(
             first_entry.device, first_entry.context->framework())];
 
-        hybridAllReduce_nosplit((const float*)buffer_data, (float*)buffer_data, num_elements, nccl_comm,
+        hybridAllReduce((const float*)buffer_data, (float*)buffer_data, num_elements, nccl_comm,
           stream, (float*)buffer_data_h, horovod_global.local_comm, horovod_global.node_comm,
           horovod_global.local_rank, horovod_global.node_size);
 #endif
@@ -950,7 +963,7 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
         auto buffer_data_h = horovod_global.tensor_fusion_buffers_h[std::make_tuple(
             e.device, e.context->framework())];
 
-        hybridAllReduce_nosplit((const float*)e.tensor->data(), (float*)e.output->data(),
+        hybridAllReduce((const float*)e.tensor->data(), (float*)e.output->data(),
           (size_t)e.tensor->shape().num_elements(), nccl_comm, stream, (float*)buffer_data_h,
           horovod_global.local_comm, horovod_global.node_comm, horovod_global.local_rank, horovod_global.node_size);
 #endif
@@ -1015,10 +1028,12 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
 
         CUDA_CHECK(entries, "cudaEventSynchronize",
                    cudaEventSynchronize(done_event))
+        PUSH_RANGE("horovod: Callback Loop", 6)
         for (auto it = entries.begin(); it != entries.end(); it++) {
           timeline.End(it->tensor_name, it->output);
           it->callback(Status::OK());
         }
+        POP_RANGE
         RELEASE_EVENT(entries, done_event);
         POP_RANGE
       });
@@ -1071,11 +1086,17 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
         num_elements += it->tensor->shape().num_elements();
       }
       PUSH_RANGE("horovod: CPU ALLREDUCE MPI FUSED", 5)
+#ifndef USE_HYBRID_ALLREDUCE
       MPI_CHECK(entries, "MPI_Allreduce",
                 MPI_Allreduce(MPI_IN_PLACE, (void*)buffer_data,
                               (int)num_elements,
                               GetMPIDataType(first_entry.tensor), MPI_SUM,
                               MPI_COMM_WORLD))
+#else
+     hybridAllReduce_nosplit_cpu((const float*)buffer_data, (float*)buffer_data, 
+       (size_t)num_elements, horovod_global.local_comm_socket, horovod_global.node_comm_socket, 
+       horovod_global.local_rank_socket, horovod_global.node_size_socket);
+#endif
       ACTIVITY_END_ALL(entries, timeline)
       POP_RANGE
 
@@ -1113,6 +1134,7 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
       PUSH_RANGE("horovod: CPU ALLREDUCE MPI SINGLE", 5)
       auto e = first_entry;
       ACTIVITY_START_ALL(entries, timeline, "MPI_ALLREDUCE")
+#ifndef USE_HYBRID_ALLREDUCE
       const void* sendbuf = e.tensor->data() == e.output->data()
                                 ? MPI_IN_PLACE
                                 : (const void*)e.tensor->data();
@@ -1121,14 +1143,21 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
                               (int)e.tensor->shape().num_elements(),
                               GetMPIDataType(e.tensor), MPI_SUM,
                               MPI_COMM_WORLD))
+#else
+     hybridAllReduce_nosplit_cpu((const float*)e.tensor->data(), (float*)e.output->data(), 
+       (size_t)e.tensor->shape().num_elements(), horovod_global.local_comm_socket, horovod_global.node_comm_socket, 
+       horovod_global.local_rank_socket, horovod_global.node_size_socket);
+#endif
       ACTIVITY_END_ALL(entries, timeline)
       POP_RANGE
     }
 
+    PUSH_RANGE("horovod: CPU Callback Loop", 6)
     for (auto it = entries.begin(); it != entries.end(); it++) {
       timeline.End(it->tensor_name, it->output);
       it->callback(Status::OK());
     }
+    POP_RANGE
 
     POP_RANGE
 
@@ -1234,6 +1263,11 @@ static void ConstructControlTree(int my_rank, int total_ranks,
   }
   if (my_rank == 0) {
     std::cout << "Using hierarchical control plane, radix = " << radix << std::endl;
+#ifdef USE_HYBRID_ALLREDUCE
+    std::cout << "Using HYBRID allreduce..." << std::endl;
+#else
+    std::cout << "Using standard allreduce..." << std::endl;
+#endif
   }
   // a value of 0 requests a completely flat tree
   if(radix == 0)
@@ -1369,10 +1403,30 @@ void BackgroundThreadLoop(HorovodGlobalState& state) {
   MPI_Comm_size(node_comm, &node_size);
   MPI_Comm_rank(node_comm, &node_rank);
 
+  /* Setup intrasocket communicators */
+  MPI_Comm local_comm_socket;
+  MPI_Comm_split(local_comm, (int)(local_rank < local_size/NSOCKETS), local_rank, &local_comm_socket);
+  int local_rank_socket, local_size_socket;
+  MPI_Comm_size(local_comm_socket, &local_size_socket);
+  MPI_Comm_rank(local_comm_socket, &local_rank_socket);
+
+  MPI_Comm node_comm_socket;
+  MPI_Comm_split(MPI_COMM_WORLD, local_rank_socket, rank, &node_comm_socket);
+  int node_rank_socket, node_size_socket;
+  MPI_Comm_size(node_comm_socket, &node_size_socket);
+  MPI_Comm_rank(node_comm_socket, &node_rank_socket);
+
   state.node_size = node_size;
   state.node_rank = node_rank;
   state.local_comm = local_comm;
   state.node_comm = node_comm;
+
+  state.local_comm_socket = local_comm_socket;
+  state.local_size_socket = local_size_socket;
+  state.local_rank_socket = local_rank_socket;
+  state.node_comm_socket = node_comm_socket;
+  state.node_size_socket = node_size_socket;
+  state.node_rank_socket = node_rank_socket;
 #endif
 
   int len;
@@ -1791,6 +1845,7 @@ void EnqueueTensorAllreduce(std::shared_ptr<OpContext> context,
                             std::shared_ptr<ReadyEvent> ready_event,
                             const std::string name, const int device,
                             StatusCallback callback) {
+  PUSH_RANGE("EnqueueTensor", 13)
   int rank;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
@@ -1817,6 +1872,7 @@ void EnqueueTensorAllreduce(std::shared_ptr<OpContext> context,
   std::lock_guard<std::mutex> guard(horovod_global.mutex);
   horovod_global.tensor_table.emplace(name, std::move(e));
   horovod_global.message_queue.push_back(message);
+  POP_RANGE
 }
 
 // MPI must be initialized and the background thread must be running before
