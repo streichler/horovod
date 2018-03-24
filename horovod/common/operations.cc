@@ -1232,15 +1232,16 @@ void CheckForStalledTensors(HorovodGlobalState& state) {
       //  std::cerr << msg_iter->request_rank();
       //}
       //std::cerr << "]";
-      std::cerr << " [stalled host:local rank:global rank:";
+      //std::cerr << " [stalled host:local rank:global rank:";
+      std::cerr << " [stalled global rank:";
       for (int i = 0; i < state.size; i++){
         if (i == 0) {
           std::cerr << " ";
         }
 
         if (not ready[i]) {
-          std::cerr << state.hostlist[i].data() << ":" ;
-          std::cerr << state.local_rank_list[i] << ":" ;
+          //std::cerr << state.hostlist[i].data() << ":" ;
+          //std::cerr << state.local_rank_list[i] << ":" ;
           std::cerr << i << ", " ;
         }
       }
@@ -1753,7 +1754,7 @@ void BackgroundThreadLoop(HorovodGlobalState& state) {
     // Check for stalled tensors.
     if (std::chrono::steady_clock::now() - state.last_stall_check >
 	STALL_WARNING_TIME) {
-      CheckForStalledTensors(state);
+      //CheckForStalledTensors(state);
       state.last_stall_check = std::chrono::steady_clock::now();
     }
   } while (!should_shut_down);
