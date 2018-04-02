@@ -17,7 +17,7 @@
 //#define USE_NVTX
 //#define USE_HYBRID_ALLREDUCE
 
-#define NSOCKETS 2
+//#define NSOCKETS 2
 
 #include <assert.h>
 #include <atomic>
@@ -33,11 +33,10 @@
 
 #if HAVE_NCCL
 #include <nccl.h>
+#endif
 
 #ifdef USE_HYBRID_ALLREDUCE
 #include "hybrid_allreduce.h"
-#endif
-
 #endif
 
 #define OMPI_SKIP_MPICXX
@@ -702,6 +701,7 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
   }
 
 #ifdef USE_HYBRID_ALLREDUCE
+#ifdef HAVE_CUDA
   // Allocate pinned host fusion buffer, regardless of entries.size()
   if (entries.size() > 0) {
     auto first_entry = entries[0];
@@ -716,6 +716,7 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
       }
     }
   }
+#endif
 #endif
 
   // On GPU data readiness is signalled by ready_event.
@@ -1406,7 +1407,8 @@ void BackgroundThreadLoop(HorovodGlobalState& state) {
 
   /* Setup intrasocket communicators */
   MPI_Comm local_comm_socket;
-  MPI_Comm_split(local_comm, (int)(local_rank < local_size/NSOCKETS), local_rank, &local_comm_socket);
+  //MPI_Comm_split(local_comm, (int)(local_rank < local_size/NSOCKETS), local_rank, &local_comm_socket);
+  MPI_Comm_split(local_comm, (int)(local_rank < 3), local_rank, &local_comm_socket); // hardcode for 6 local ranks across 2 sockets
   int local_rank_socket, local_size_socket;
   MPI_Comm_size(local_comm_socket, &local_size_socket);
   MPI_Comm_rank(local_comm_socket, &local_rank_socket);
@@ -1428,6 +1430,23 @@ void BackgroundThreadLoop(HorovodGlobalState& state) {
   state.node_comm_socket = node_comm_socket;
   state.node_size_socket = node_size_socket;
   state.node_rank_socket = node_rank_socket;
+
+  /* Easy warning messages to make sure hybrid code is not used in an unsupported configuration. Need to generalize.*/
+  /* Check for whole node multiple */
+  if (size > 6 and size % 6 != 0) {
+    std::cerr << "ALERT!!: A value other than 6 ranks per node detected! HOROVOD_HYBRID_ALLREDUCE not supported in this configuration. Recompile without this feature.";
+    std::cerr << std::endl;
+    MPI_Finalize(); exit(EXIT_FAILURE);                             \
+    
+  }
+    
+  /* Check for whole socket multiple */
+  if (size > 3 and size % 3 != 0){
+    std::cerr << "ALERT!!: A value other than 3 ranks per socket detected! HOROVOD_HYBRID_ALLREDUCE not supported in this configuration. Recompile without this feature.";
+    std::cerr << std::endl;
+    MPI_Finalize(); exit(EXIT_FAILURE);                             \
+  }
+  
 #endif
 
   int len;

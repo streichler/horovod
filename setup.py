@@ -349,12 +349,10 @@ def get_common_options(build_ext):
 
     if have_nccl:
         MACROS += [('HAVE_NCCL', '1')]
-        MACROS += [('USE_HYBRID_ALLREDUCE', '1')]
         INCLUDES += nccl_include_dirs
         LINK_FLAGS += ['-Wl,--version-script=hide_nccl.lds']
         LIBRARY_DIRS += nccl_lib_dirs
         LIBRARIES += ['nccl_static']
-        SOURCES += ['horovod/common/hybrid_allreduce.cc']
 
     if gpu_allreduce:
         MACROS += [('HOROVOD_GPU_ALLREDUCE', "'%s'" % gpu_allreduce[0])]
@@ -364,6 +362,10 @@ def get_common_options(build_ext):
 
     if gpu_broadcast:
         MACROS += [('HOROVOD_GPU_BROADCAST', "'%s'" % gpu_broadcast[0])]
+
+    if ("HOROVOD_HYBRID_ALLREDUCE" in os.environ):
+        MACROS += [('USE_HYBRID_ALLREDUCE', '1')]
+        SOURCES += ['horovod/common/hybrid_allreduce.cc']
 
     return dict(MACROS=MACROS,
                 INCLUDES=INCLUDES,
