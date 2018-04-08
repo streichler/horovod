@@ -821,13 +821,18 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
       // Ensure stream is in the map before executing reduction.
       cudaStream_t& stream = horovod_global.streams[first_entry.device];
       if (stream == nullptr) {
-#ifdef USE_PRIORITY
-        int greatestPriority;
-        cudaDeviceGetStreamPriorityRange(NULL, &greatestPriority);
-        cudaStreamCreateWithPriority(&stream, cudaStreamNonBlocking, greatestPriority);
-#else
-        CUDA_CHECK(entries, "cudaStreamCreate", cudaStreamCreate(&stream))
-#endif
+        auto horovod_use_priority = std::getenv("HOROVOD_USE_PRIORITY");
+
+	if (horovod_use_priority != nullptr) {
+          if (horovod_global.rank == 0) printf("Using priority stream for NCCL...\n");
+
+          int greatestPriority;
+          CUDACHECK(cudaDeviceGetStreamPriorityRange(NULL, &greatestPriority));
+          CUDACHECK(cudaStreamCreateWithPriority(&stream, cudaStreamNonBlocking, greatestPriority));
+        } else {
+          CUDA_CHECK(entries, "cudaStreamCreate", cudaStreamCreate(&stream))
+        }
+
       }
     }
 #endif
