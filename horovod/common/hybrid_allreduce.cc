@@ -21,15 +21,15 @@ void hybridAllReduce(const float* sbuf, float* rbuf, size_t count, ncclComm_t nc
   {
     size_t blockcount = count/ALIGN_FLOATS/4 * ALIGN_FLOATS; 
 
-    /* Intranode AllReduce using local ranks 0,1,3,4*/
-    if (lrank == 0 or lrank == 1 or lrank == 3 or lrank == 4)
+    /* Intranode AllReduce using local ranks 0,2,4,6*/
+    if (lrank == 0 or lrank == 2 or lrank == 4 or lrank == 6)
     {
       size_t shift = 0;
-      if (lrank == 1) shift = 1;
-      else if (lrank == 3) shift = 2;
-      else if (lrank == 4) shift = 3;
+      if (lrank == 2) shift = 1;
+      else if (lrank == 4) shift = 2;
+      else if (lrank == 6) shift = 3;
 
-      CUDACHECK(cudaMemcpyAsync(rbuf_h, &rbuf[shift * blockcount], ((lrank == 4) ? blockcount + count%blockcount : blockcount)*sizeof(float),
+      CUDACHECK(cudaMemcpyAsync(rbuf_h, &rbuf[shift * blockcount], ((lrank == 6) ? blockcount + count%blockcount : blockcount)*sizeof(float),
                   cudaMemcpyDeviceToHost, stream));
       cudaStreamSynchronize(stream);
 
@@ -37,7 +37,7 @@ void hybridAllReduce(const float* sbuf, float* rbuf, size_t count, ncclComm_t nc
       MPI_Allreduce(MPI_IN_PLACE, rbuf_h, ((lrank == 4) ? blockcount + count%blockcount : blockcount), MPI_FLOAT, MPI_SUM, node_comm);
       POP_RANGE
 
-      CUDACHECK(cudaMemcpyAsync(&rbuf[shift * blockcount], rbuf_h, ((lrank == 4) ? blockcount + count%blockcount : blockcount)*sizeof(float),
+      CUDACHECK(cudaMemcpyAsync(&rbuf[shift * blockcount], rbuf_h, ((lrank == 6) ? blockcount + count%blockcount : blockcount)*sizeof(float),
                   cudaMemcpyHostToDevice, stream));
       //cudaStreamSynchronize(stream);
     }
@@ -47,9 +47,9 @@ void hybridAllReduce(const float* sbuf, float* rbuf, size_t count, ncclComm_t nc
 
     /* Bcast on node */
     NCCLCHECK(ncclBcast(rbuf, blockcount, ncclFloat, 0, nccl_local_comm, stream));
-    NCCLCHECK(ncclBcast(&rbuf[1 * blockcount], blockcount, ncclFloat, 1, nccl_local_comm, stream));
-    NCCLCHECK(ncclBcast(&rbuf[2 * blockcount], blockcount, ncclFloat, 3, nccl_local_comm, stream));
-    NCCLCHECK(ncclBcast(&rbuf[3 * blockcount], blockcount + count%blockcount, ncclFloat, 4, nccl_local_comm, stream));
+    NCCLCHECK(ncclBcast(&rbuf[1 * blockcount], blockcount, ncclFloat, 2, nccl_local_comm, stream));
+    NCCLCHECK(ncclBcast(&rbuf[2 * blockcount], blockcount, ncclFloat, 4, nccl_local_comm, stream));
+    NCCLCHECK(ncclBcast(&rbuf[3 * blockcount], blockcount + count%blockcount, ncclFloat, 6, nccl_local_comm, stream));
   }
 }
 
