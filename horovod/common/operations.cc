@@ -1438,16 +1438,16 @@ void BackgroundThreadLoop(HorovodGlobalState& state) {
 
   /* Easy warning messages to make sure hybrid code is not used in an unsupported configuration. Need to generalize.*/
   /* Check for whole node multiple */
-  if (size > 6 and size % 6 != 0) {
-    std::cerr << "ALERT!!: A value other than 6 ranks per node detected! HOROVOD_HYBRID_ALLREDUCE not supported in this configuration. Recompile without this feature.";
+  if (size > 8 and size % 8 != 0) {
+    std::cerr << "ALERT!!: A value other than 8 ranks per node detected! HOROVOD_HYBRID_ALLREDUCE not supported in this configuration. Recompile without this feature.";
     std::cerr << std::endl;
     MPI_Finalize(); exit(EXIT_FAILURE);                             \
     
   }
     
   /* Check for whole socket multiple */
-  if (size > 3 and size % 3 != 0){
-    std::cerr << "ALERT!!: A value other than 3 ranks per socket detected! HOROVOD_HYBRID_ALLREDUCE not supported in this configuration. Recompile without this feature.";
+  if (size > 4 and size % 4 != 0){
+    std::cerr << "ALERT!!: A value other than 4 ranks per socket detected! HOROVOD_HYBRID_ALLREDUCE not supported in this configuration. Recompile without this feature.";
     std::cerr << std::endl;
     MPI_Finalize(); exit(EXIT_FAILURE);                             \
   }
