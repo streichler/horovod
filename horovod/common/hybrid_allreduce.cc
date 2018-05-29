@@ -34,7 +34,7 @@ void hybridAllReduce(const float* sbuf, float* rbuf, size_t count, ncclComm_t nc
       cudaStreamSynchronize(stream);
 
       PUSH_RANGE("MPI_Allreduce", 0)
-      MPI_Allreduce(MPI_IN_PLACE, rbuf_h, ((lrank == 4) ? blockcount + count%blockcount : blockcount), MPI_FLOAT, MPI_SUM, node_comm);
+      MPI_Allreduce(MPI_IN_PLACE, rbuf_h, ((lrank == 6) ? blockcount + count%blockcount : blockcount), MPI_FLOAT, MPI_SUM, node_comm);
       POP_RANGE
 
       CUDACHECK(cudaMemcpyAsync(&rbuf[shift * blockcount], rbuf_h, ((lrank == 6) ? blockcount + count%blockcount : blockcount)*sizeof(float),
