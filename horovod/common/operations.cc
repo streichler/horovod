@@ -935,7 +935,7 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
         auto buffer_data_h = horovod_global.tensor_fusion_buffers_h[std::make_tuple(
             first_entry.device, first_entry.context->framework())];
 
-        hybridAllReduce((const float*)buffer_data, (float*)buffer_data, num_elements, nccl_comm,
+        hybridAllReduce_nosplit((const float*)buffer_data, (float*)buffer_data, num_elements, nccl_comm,
           stream, (float*)buffer_data_h, horovod_global.local_comm, horovod_global.node_comm,
           horovod_global.local_rank, horovod_global.node_size);
 #endif
@@ -969,7 +969,7 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
         auto buffer_data_h = horovod_global.tensor_fusion_buffers_h[std::make_tuple(
             e.device, e.context->framework())];
 
-        hybridAllReduce((const float*)e.tensor->data(), (float*)e.output->data(),
+        hybridAllReduce_nosplit((const float*)e.tensor->data(), (float*)e.output->data(),
           (size_t)e.tensor->shape().num_elements(), nccl_comm, stream, (float*)buffer_data_h,
           horovod_global.local_comm, horovod_global.node_comm, horovod_global.local_rank, horovod_global.node_size);
 #endif
