@@ -1413,7 +1413,7 @@ void BackgroundThreadLoop(HorovodGlobalState& state) {
   /* Setup intrasocket communicators */
   MPI_Comm local_comm_socket;
   //MPI_Comm_split(local_comm, (int)(local_rank < local_size/NSOCKETS), local_rank, &local_comm_socket);
-  MPI_Comm_split(local_comm, (int)(local_rank < 3), local_rank, &local_comm_socket); // hardcode for 6 local ranks across 2 sockets
+  MPI_Comm_split(local_comm, (int)(local_rank < 4), local_rank, &local_comm_socket); // hardcode for 8 local ranks across 2 sockets
   int local_rank_socket, local_size_socket;
   MPI_Comm_size(local_comm_socket, &local_size_socket);
   MPI_Comm_rank(local_comm_socket, &local_rank_socket);
