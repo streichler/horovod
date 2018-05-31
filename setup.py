@@ -363,9 +363,12 @@ def get_common_options(build_ext):
     if gpu_broadcast:
         MACROS += [('HOROVOD_GPU_BROADCAST', "'%s'" % gpu_broadcast[0])]
 
-    if ("HOROVOD_HYBRID_ALLREDUCE" in os.environ):
-        MACROS += [('USE_HYBRID_ALLREDUCE', '1')]
-        SOURCES += ['horovod/common/hybrid_allreduce.cc']
+    #if ("HOROVOD_HYBRID_ALLREDUCE" in os.environ):
+    #    MACROS += [('USE_HYBRID_ALLREDUCE', '1')]
+    SOURCES += ['horovod/common/hybrid_allreduce.cc']
+
+    if ("HOROVOD_NVTX" in os.environ):
+        MACROS += [('USE_NVTX', '1')]
 
     return dict(MACROS=MACROS,
                 INCLUDES=INCLUDES,
