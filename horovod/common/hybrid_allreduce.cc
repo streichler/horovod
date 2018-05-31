@@ -21,6 +21,14 @@ void hybridAllReduce(const float* sbuf, float* rbuf, size_t count, ncclComm_t nc
   {
     size_t blockcount = count/ALIGN_FLOATS/4 * ALIGN_FLOATS; 
 
+    // If buffer is too small to split, fallback to no split version
+    if (blockcount == 0)
+    {
+       hybridAllReduce_nosplit(sbuf, rbuf, count, nccl_local_comm,
+         stream, rbuf_h, local_comm, node_comm, lrank, nsize);
+       return;
+    }
+
     /* Intranode AllReduce using local ranks 0,1,3,4*/
     if (lrank == 0 or lrank == 1 or lrank == 3 or lrank == 4)
     {

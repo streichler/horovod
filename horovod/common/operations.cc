@@ -35,9 +35,9 @@
 #include <nccl.h>
 #endif
 
-#ifdef USE_HYBRID_ALLREDUCE
+//#ifdef USE_HYBRID_ALLREDUCE
 #include "hybrid_allreduce.h"
-#endif
+//#endif
 
 #define OMPI_SKIP_MPICXX
 #include "hashes.h"
@@ -156,11 +156,11 @@ struct HorovodGlobalState {
   std::unordered_map<std::tuple<int, Framework>,
                      std::shared_ptr<PersistentBuffer>>
       tensor_fusion_buffers;
-#ifdef USE_HYBRID_ALLREDUCE
+//#ifdef USE_HYBRID_ALLREDUCE
   std::unordered_map<std::tuple<int, Framework>,
                      float*>
       tensor_fusion_buffers_h;
-#endif
+//#endif
 
   // Whether MPI_Init has been completed on the background thread.
   bool initialization_done = false;
@@ -173,7 +173,7 @@ struct HorovodGlobalState {
   int local_size = 1;
   bool mpi_threads_supported = false;
 
-#ifdef USE_HYBRID_ALLREDUCE
+//#ifdef USE_HYBRID_ALLREDUCE
   int node_size = 1;
   int node_rank = 0;
   MPI_Comm local_comm;
@@ -185,7 +185,7 @@ struct HorovodGlobalState {
   int node_rank_socket = 0;
   MPI_Comm local_comm_socket;
   MPI_Comm node_comm_socket;
-#endif
+//#endif
 
   std::array<char, MPI_MAX_PROCESSOR_NAME> hostname;
   std::vector<std::array<char, MPI_MAX_PROCESSOR_NAME>> hostlist;
@@ -700,24 +700,27 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
     }
   }
 
-#ifdef USE_HYBRID_ALLREDUCE
+  auto horovod_use_hybrid_allreduce = std::getenv("HOROVOD_USE_HYBRID_ALLREDUCE");
+//#ifdef USE_HYBRID_ALLREDUCE
+  if (horovod_use_hybrid_allreduce != nullptr) {
 #ifdef HAVE_CUDA
-  // Allocate pinned host fusion buffer, regardless of entries.size()
-  if (entries.size() > 0) {
-    auto first_entry = entries[0];
-    bool on_gpu = first_entry.device != CPU_DEVICE_ID;
-    if (on_gpu)
-    { 
-      auto& buffer_h = horovod_global.tensor_fusion_buffers_h[std::make_tuple(
-          first_entry.device, first_entry.context->framework())];
-      if (buffer_h == nullptr) {
-        if (horovod_global.rank == 0) printf("Allocating pinned buffers on host...\n");
-        CUDACHECK(cudaMallocHost(&buffer_h, horovod_global.tensor_fusion_threshold));
+    // Allocate pinned host fusion buffer, regardless of entries.size()
+    if (entries.size() > 0) {
+      auto first_entry = entries[0];
+      bool on_gpu = first_entry.device != CPU_DEVICE_ID;
+      if (on_gpu)
+      {
+        auto& buffer_h = horovod_global.tensor_fusion_buffers_h[std::make_tuple(
+            first_entry.device, first_entry.context->framework())];
+        if (buffer_h == nullptr) {
+          if (horovod_global.rank == 0) printf("Allocating pinned buffers on host...\n");
+          CUDACHECK(cudaMallocHost(&buffer_h, horovod_global.tensor_fusion_threshold));
+        }
       }
     }
   }
 #endif
-#endif
+//#endif
 
   // On GPU data readiness is signalled by ready_event.
   PUSH_RANGE("horovod: WAIT FOR DATA", 3)
@@ -847,40 +850,43 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
         ACTIVITY_START_ALL(entries, timeline, "INIT_NCCL")
 
         ncclUniqueId nccl_id;
-#ifndef USE_HYBRID_ALLREDUCE
-        if (horovod_global.rank == 0) printf("Using NCCL allreduce, creating global NCCL communicator...\n");
+//#ifndef USE_HYBRID_ALLREDUCE
+        if (horovod_use_hybrid_allreduce == nullptr) {
+          if (horovod_global.rank == 0) printf("Using NCCL allreduce, creating global NCCL communicator...\n");
 
-        if (horovod_global.rank == 0) {
-          NCCL_CHECK(entries, "ncclGetUniqueId", ncclGetUniqueId(&nccl_id))
+          if (horovod_global.rank == 0) {
+            NCCL_CHECK(entries, "ncclGetUniqueId", ncclGetUniqueId(&nccl_id))
+          }
+
+          MPI_CHECK(entries, "MPI_Bcast",
+                    MPI_Bcast((void*)&nccl_id, sizeof(nccl_id), MPI_BYTE, 0,
+                              MPI_COMM_WORLD));
+
+          ncclComm_t new_nccl_comm;
+          NCCL_CHECK(entries, "ncclCommInitRank",
+                     ncclCommInitRank(&new_nccl_comm, horovod_global.size,
+                                      nccl_id, horovod_global.rank))
+          nccl_comm = new_nccl_comm;
+//#else
+        } else {
+          if (horovod_global.rank == 0) printf("Using HYBRID allreduce, creating node local NCCL communicators...\n");
+
+          // Replacing global nccl communicator with node local communicator
+          if (horovod_global.local_rank == 0) {
+            NCCL_CHECK(entries, "ncclGetUniqueId", ncclGetUniqueId(&nccl_id))
+          }
+
+          MPI_CHECK(entries, "MPI_Bcast",
+                    MPI_Bcast((void*)&nccl_id, sizeof(nccl_id), MPI_BYTE, 0,
+                              horovod_global.local_comm));
+
+          ncclComm_t new_nccl_comm;
+          NCCL_CHECK(entries, "ncclCommInitRank",
+                     ncclCommInitRank(&new_nccl_comm, horovod_global.local_size, nccl_id,
+                                      horovod_global.local_rank))
+          nccl_comm = new_nccl_comm;
         }
-
-        MPI_CHECK(entries, "MPI_Bcast",
-                  MPI_Bcast((void*)&nccl_id, sizeof(nccl_id), MPI_BYTE, 0,
-                            MPI_COMM_WORLD));
-
-        ncclComm_t new_nccl_comm;
-        NCCL_CHECK(entries, "ncclCommInitRank",
-                   ncclCommInitRank(&new_nccl_comm, horovod_global.size,
-                                    nccl_id, horovod_global.rank))
-        nccl_comm = new_nccl_comm;
-#else
-        if (horovod_global.rank == 0) printf("Using HYBRID allreduce, creating node local NCCL communicators...\n");
-
-        // Replacing global nccl communicator with node local communicator
-        if (horovod_global.local_rank == 0) {
-          NCCL_CHECK(entries, "ncclGetUniqueId", ncclGetUniqueId(&nccl_id))
-        }
-
-        MPI_CHECK(entries, "MPI_Bcast",
-                  MPI_Bcast((void*)&nccl_id, sizeof(nccl_id), MPI_BYTE, 0,
-                            horovod_global.local_comm));
-
-        ncclComm_t new_nccl_comm;
-        NCCL_CHECK(entries, "ncclCommInitRank",
-                   ncclCommInitRank(&new_nccl_comm, horovod_global.local_size, nccl_id,
-                                    horovod_global.local_rank))
-        nccl_comm = new_nccl_comm;
-#endif
+//#endif
 
         // Barrier helps NCCL to synchronize after initialization and avoid
         // deadlock that we've been seeing without it.
@@ -924,21 +930,24 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
         for (auto it = entries.begin(); it != entries.end(); it++) {
           num_elements += it->tensor->shape().num_elements();
         }
-#ifndef USE_HYBRID_ALLREDUCE
-        NCCL_CHECK(entries, "ncclAllReduce",
-                   ncclAllReduce((const void*)buffer_data, (void*)buffer_data,
-                                 (size_t)num_elements,
-                                 GetNCCLDataType(first_entry.tensor), ncclSum,
-                                 nccl_comm, stream))
-#else
-        // Access host fusion buffer
-        auto buffer_data_h = horovod_global.tensor_fusion_buffers_h[std::make_tuple(
-            first_entry.device, first_entry.context->framework())];
+//#ifndef USE_HYBRID_ALLREDUCE
+        if (horovod_use_hybrid_allreduce == nullptr) {
+          NCCL_CHECK(entries, "ncclAllReduce",
+                     ncclAllReduce((const void*)buffer_data, (void*)buffer_data,
+                                   (size_t)num_elements,
+                                   GetNCCLDataType(first_entry.tensor), ncclSum,
+                                   nccl_comm, stream))
+//#else
+        } else {
+          // Access host fusion buffer
+          auto buffer_data_h = horovod_global.tensor_fusion_buffers_h[std::make_tuple(
+              first_entry.device, first_entry.context->framework())];
 
-        hybridAllReduce((const float*)buffer_data, (float*)buffer_data, num_elements, nccl_comm,
-          stream, (float*)buffer_data_h, horovod_global.local_comm, horovod_global.node_comm,
-          horovod_global.local_rank, horovod_global.node_size);
-#endif
+          hybridAllReduce((const float*)buffer_data, (float*)buffer_data, num_elements, nccl_comm,
+            stream, (float*)buffer_data_h, horovod_global.local_comm, horovod_global.node_comm,
+            horovod_global.local_rank, horovod_global.node_size);
+        }
+//#endif
         if (timeline.Initialized()) {
           RECORD_EVENT(entries, after_reduce_event, stream)
         }
@@ -958,21 +967,24 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
         }
       } else {
         auto e = first_entry;
-#ifndef USE_HYBRID_ALLREDUCE
-        NCCL_CHECK(entries, "ncclAllReduce",
-                   ncclAllReduce((const void*)e.tensor->data(),
-                                 (void*)e.output->data(),
-                                 (size_t)e.tensor->shape().num_elements(),
-                                 GetNCCLDataType(first_entry.tensor), ncclSum,
-                                 nccl_comm, stream))
-#else
-        auto buffer_data_h = horovod_global.tensor_fusion_buffers_h[std::make_tuple(
-            e.device, e.context->framework())];
+//#ifndef USE_HYBRID_ALLREDUCE
+        if (horovod_use_hybrid_allreduce == nullptr) {
+          NCCL_CHECK(entries, "ncclAllReduce",
+                     ncclAllReduce((const void*)e.tensor->data(),
+                                   (void*)e.output->data(),
+                                   (size_t)e.tensor->shape().num_elements(),
+                                   GetNCCLDataType(first_entry.tensor), ncclSum,
+                                   nccl_comm, stream))
+//#else
+        } else {
+          auto buffer_data_h = horovod_global.tensor_fusion_buffers_h[std::make_tuple(
+              e.device, e.context->framework())];
 
-        hybridAllReduce((const float*)e.tensor->data(), (float*)e.output->data(),
-          (size_t)e.tensor->shape().num_elements(), nccl_comm, stream, (float*)buffer_data_h,
-          horovod_global.local_comm, horovod_global.node_comm, horovod_global.local_rank, horovod_global.node_size);
-#endif
+          hybridAllReduce((const float*)e.tensor->data(), (float*)e.output->data(),
+            (size_t)e.tensor->shape().num_elements(), nccl_comm, stream, (float*)buffer_data_h,
+            horovod_global.local_comm, horovod_global.node_comm, horovod_global.local_rank, horovod_global.node_size);
+        }
+//#endif
         if (timeline.Initialized()) {
           RECORD_EVENT(entries, after_reduce_event, stream)
         }
@@ -1092,17 +1104,20 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
         num_elements += it->tensor->shape().num_elements();
       }
       PUSH_RANGE("horovod: CPU ALLREDUCE MPI FUSED", 5)
-#ifndef USE_HYBRID_ALLREDUCE
-      MPI_CHECK(entries, "MPI_Allreduce",
-                MPI_Allreduce(MPI_IN_PLACE, (void*)buffer_data,
-                              (int)num_elements,
-                              GetMPIDataType(first_entry.tensor), MPI_SUM,
-                              MPI_COMM_WORLD))
-#else
-     hybridAllReduce_nosplit_cpu((const float*)buffer_data, (float*)buffer_data, 
-       (size_t)num_elements, horovod_global.local_comm_socket, horovod_global.node_comm_socket, 
-       horovod_global.local_rank_socket, horovod_global.node_size_socket);
-#endif
+//#ifndef USE_HYBRID_ALLREDUCE
+      if (horovod_use_hybrid_allreduce == nullptr) {
+        MPI_CHECK(entries, "MPI_Allreduce",
+                  MPI_Allreduce(MPI_IN_PLACE, (void*)buffer_data,
+                                (int)num_elements,
+                                GetMPIDataType(first_entry.tensor), MPI_SUM,
+                                MPI_COMM_WORLD))
+//#else
+      } else {
+       hybridAllReduce_nosplit_cpu((const float*)buffer_data, (float*)buffer_data,
+         (size_t)num_elements, horovod_global.local_comm_socket, horovod_global.node_comm_socket,
+         horovod_global.local_rank_socket, horovod_global.node_size_socket);
+      }
+//#endif
       ACTIVITY_END_ALL(entries, timeline)
       POP_RANGE
 
@@ -1140,20 +1155,23 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
       PUSH_RANGE("horovod: CPU ALLREDUCE MPI SINGLE", 5)
       auto e = first_entry;
       ACTIVITY_START_ALL(entries, timeline, "MPI_ALLREDUCE")
-#ifndef USE_HYBRID_ALLREDUCE
-      const void* sendbuf = e.tensor->data() == e.output->data()
-                                ? MPI_IN_PLACE
-                                : (const void*)e.tensor->data();
-      MPI_CHECK(entries, "MPI_Allreduce",
-                MPI_Allreduce(sendbuf, (void*)e.output->data(),
-                              (int)e.tensor->shape().num_elements(),
-                              GetMPIDataType(e.tensor), MPI_SUM,
-                              MPI_COMM_WORLD))
-#else
-     hybridAllReduce_nosplit_cpu((const float*)e.tensor->data(), (float*)e.output->data(), 
-       (size_t)e.tensor->shape().num_elements(), horovod_global.local_comm_socket, horovod_global.node_comm_socket, 
-       horovod_global.local_rank_socket, horovod_global.node_size_socket);
-#endif
+//#ifndef USE_HYBRID_ALLREDUCE
+      if (horovod_use_hybrid_allreduce == nullptr) {
+        const void* sendbuf = e.tensor->data() == e.output->data()
+                                  ? MPI_IN_PLACE
+                                  : (const void*)e.tensor->data();
+        MPI_CHECK(entries, "MPI_Allreduce",
+                  MPI_Allreduce(sendbuf, (void*)e.output->data(),
+                                (int)e.tensor->shape().num_elements(),
+                                GetMPIDataType(e.tensor), MPI_SUM,
+                                MPI_COMM_WORLD))
+//#else
+     } else {
+       hybridAllReduce_nosplit_cpu((const float*)e.tensor->data(), (float*)e.output->data(),
+         (size_t)e.tensor->shape().num_elements(), horovod_global.local_comm_socket, horovod_global.node_comm_socket,
+         horovod_global.local_rank_socket, horovod_global.node_size_socket);
+     }
+//#endif
       ACTIVITY_END_ALL(entries, timeline)
       POP_RANGE
     }
@@ -1270,11 +1288,15 @@ static void ConstructControlTree(int my_rank, int total_ranks,
   }
   if (my_rank == 0) {
     std::cout << "Using hierarchical control plane, radix = " << radix << std::endl;
-#ifdef USE_HYBRID_ALLREDUCE
-    std::cout << "Using HYBRID allreduce..." << std::endl;
-#else
-    std::cout << "Using standard allreduce..." << std::endl;
-#endif
+    auto horovod_use_hybrid_allreduce = std::getenv("HOROVOD_USE_HYBRID_ALLREDUCE");
+//#ifdef USE_HYBRID_ALLREDUCE
+    if (horovod_use_hybrid_allreduce != nullptr) {
+      std::cout << "Using HYBRID allreduce..." << std::endl;
+//#else
+    } else {
+      std::cout << "Using standard allreduce..." << std::endl;
+    }
+//#endif
   }
   // a value of 0 requests a completely flat tree
   if(radix == 0)
@@ -1402,57 +1424,59 @@ void BackgroundThreadLoop(HorovodGlobalState& state) {
   MPI_Comm_rank(local_comm, &local_rank);
   MPI_Comm_size(local_comm, &local_size);
 
-#ifdef USE_HYBRID_ALLREDUCE
-  // Create intranode MPI communicator (connecting local ranks)
-  MPI_Comm node_comm;
-  MPI_Comm_split(MPI_COMM_WORLD, local_rank, rank, &node_comm);
-  int node_rank, node_size;
-  MPI_Comm_size(node_comm, &node_size);
-  MPI_Comm_rank(node_comm, &node_rank);
+  auto horovod_use_hybrid_allreduce = std::getenv("HOROVOD_USE_HYBRID_ALLREDUCE");
+//#ifdef USE_HYBRID_ALLREDUCE
+  if (horovod_use_hybrid_allreduce != nullptr) {
+    // Create intranode MPI communicator (connecting local ranks)
+    MPI_Comm node_comm;
+    MPI_Comm_split(MPI_COMM_WORLD, local_rank, rank, &node_comm);
+    int node_rank, node_size;
+    MPI_Comm_size(node_comm, &node_size);
+    MPI_Comm_rank(node_comm, &node_rank);
 
-  /* Setup intrasocket communicators */
-  MPI_Comm local_comm_socket;
-  //MPI_Comm_split(local_comm, (int)(local_rank < local_size/NSOCKETS), local_rank, &local_comm_socket);
-  MPI_Comm_split(local_comm, (int)(local_rank < 3), local_rank, &local_comm_socket); // hardcode for 6 local ranks across 2 sockets
-  int local_rank_socket, local_size_socket;
-  MPI_Comm_size(local_comm_socket, &local_size_socket);
-  MPI_Comm_rank(local_comm_socket, &local_rank_socket);
+    /* Setup intrasocket communicators */
+    MPI_Comm local_comm_socket;
+    //MPI_Comm_split(local_comm, (int)(local_rank < local_size/NSOCKETS), local_rank, &local_comm_socket);
+    MPI_Comm_split(local_comm, (int)(local_rank < 3), local_rank, &local_comm_socket); // hardcode for 6 local ranks across 2 sockets
+    int local_rank_socket, local_size_socket;
+    MPI_Comm_size(local_comm_socket, &local_size_socket);
+    MPI_Comm_rank(local_comm_socket, &local_rank_socket);
 
-  MPI_Comm node_comm_socket;
-  MPI_Comm_split(MPI_COMM_WORLD, local_rank_socket, rank, &node_comm_socket);
-  int node_rank_socket, node_size_socket;
-  MPI_Comm_size(node_comm_socket, &node_size_socket);
-  MPI_Comm_rank(node_comm_socket, &node_rank_socket);
+    MPI_Comm node_comm_socket;
+    MPI_Comm_split(MPI_COMM_WORLD, local_rank_socket, rank, &node_comm_socket);
+    int node_rank_socket, node_size_socket;
+    MPI_Comm_size(node_comm_socket, &node_size_socket);
+    MPI_Comm_rank(node_comm_socket, &node_rank_socket);
 
-  state.node_size = node_size;
-  state.node_rank = node_rank;
-  state.local_comm = local_comm;
-  state.node_comm = node_comm;
+    state.node_size = node_size;
+    state.node_rank = node_rank;
+    state.local_comm = local_comm;
+    state.node_comm = node_comm;
 
-  state.local_comm_socket = local_comm_socket;
-  state.local_size_socket = local_size_socket;
-  state.local_rank_socket = local_rank_socket;
-  state.node_comm_socket = node_comm_socket;
-  state.node_size_socket = node_size_socket;
-  state.node_rank_socket = node_rank_socket;
+    state.local_comm_socket = local_comm_socket;
+    state.local_size_socket = local_size_socket;
+    state.local_rank_socket = local_rank_socket;
+    state.node_comm_socket = node_comm_socket;
+    state.node_size_socket = node_size_socket;
+    state.node_rank_socket = node_rank_socket;
 
-  /* Easy warning messages to make sure hybrid code is not used in an unsupported configuration. Need to generalize.*/
-  /* Check for whole node multiple */
-  if (size > 6 and size % 6 != 0) {
-    std::cerr << "ALERT!!: A value other than 6 ranks per node detected! HOROVOD_HYBRID_ALLREDUCE not supported in this configuration. Recompile without this feature.";
-    std::cerr << std::endl;
-    MPI_Finalize(); exit(EXIT_FAILURE);                             \
-    
+    /* Easy warning messages to make sure hybrid code is not used in an unsupported configuration. Need to generalize.*/
+    /* Check for whole node multiple */
+    if (size > 6 and size % 6 != 0) {
+      std::cerr << "ALERT!!: A value other than 6 ranks per node detected! HOROVOD_HYBRID_ALLREDUCE not supported in this configuration. Recompile without this feature.";
+      std::cerr << std::endl;
+      MPI_Finalize(); exit(EXIT_FAILURE);                             \
+      
+    }
+      
+    /* Check for whole socket multiple */
+    if (size > 3 and size % 3 != 0){
+      std::cerr << "ALERT!!: A value other than 3 ranks per socket detected! HOROVOD_HYBRID_ALLREDUCE not supported in this configuration. Recompile without this feature.";
+      std::cerr << std::endl;
+      MPI_Finalize(); exit(EXIT_FAILURE);                             \
+    }
   }
-    
-  /* Check for whole socket multiple */
-  if (size > 3 and size % 3 != 0){
-    std::cerr << "ALERT!!: A value other than 3 ranks per socket detected! HOROVOD_HYBRID_ALLREDUCE not supported in this configuration. Recompile without this feature.";
-    std::cerr << std::endl;
-    MPI_Finalize(); exit(EXIT_FAILURE);                             \
-  }
-  
-#endif
+//#endif
 
   int len;
   MPI_Get_processor_name(state.hostname.data(), &len);
