@@ -38,6 +38,9 @@ const std::string& MPIDataType_Name(MPIDataType value) {
   case HOROVOD_INT32:
     static const std::string int32("int32");
     return int32;
+  case HOROVOD_FLOAT16:
+    static const std::string float16("float16");
+    return float16;
   case HOROVOD_INT64:
     static const std::string int64("int64");
     return int64;
