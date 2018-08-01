@@ -11,11 +11,14 @@
 #define ALIGN_FLOATS 256
 
 #if HAVE_NCCL
-void hybridAllReduce(const float* sbuf, float* rbuf, size_t count, ncclComm_t nccl_local_comm,
-  cudaStream_t stream, float* rbuf_h, MPI_Comm local_comm, MPI_Comm node_comm, int lrank, int nsize)
+void hybridAllReduce(const void* sbuf, void* rbuf, size_t count, ncclDataType_t nccl_type, ncclRedOp_t nccl_op, ncclComm_t nccl_local_comm,
+  cudaStream_t stream, void* rbuf_h, MPI_Datatype mpi_type, MPI_Op mpi_op, MPI_Comm local_comm, MPI_Comm node_comm, int lrank, int nsize)
 {
+  int typesize;
+  MPI_Type_size(mpi_type, &typesize);
+
   /* AllReduce on node */
-  NCCLCHECK(ncclAllReduce(sbuf, rbuf, count, ncclFloat, ncclSum, nccl_local_comm, stream));
+  NCCLCHECK(ncclAllReduce(sbuf, rbuf, count, nccl_type, nccl_op, nccl_local_comm, stream));
 
   if (nsize > 1)
   {
@@ -24,8 +27,8 @@ void hybridAllReduce(const float* sbuf, float* rbuf, size_t count, ncclComm_t nc
     // If buffer is too small to split, fallback to no split version
     if (blockcount == 0)
     {
-       hybridAllReduce_nosplit(sbuf, rbuf, count, nccl_local_comm,
-         stream, rbuf_h, local_comm, node_comm, lrank, nsize);
+       hybridAllReduce_nosplit(sbuf, rbuf, count, nccl_type, nccl_op, nccl_local_comm,
+         stream, rbuf_h, mpi_type, mpi_op, local_comm, node_comm, lrank, nsize);
        return;
     }
 
@@ -37,15 +40,17 @@ void hybridAllReduce(const float* sbuf, float* rbuf, size_t count, ncclComm_t nc
       else if (lrank == 3) shift = 2;
       else if (lrank == 4) shift = 3;
 
-      CUDACHECK(cudaMemcpyAsync(rbuf_h, &rbuf[shift * blockcount], ((lrank == 4) ? blockcount + count%blockcount : blockcount)*sizeof(float),
+      
+
+      CUDACHECK(cudaMemcpyAsync(rbuf_h, rbuf + (shift * blockcount)*typesize, ((lrank == 4) ? blockcount + count%blockcount : blockcount)*typesize,
                   cudaMemcpyDeviceToHost, stream));
       cudaStreamSynchronize(stream);
 
       PUSH_RANGE("MPI_Allreduce", 0)
-      MPI_Allreduce(MPI_IN_PLACE, rbuf_h, ((lrank == 4) ? blockcount + count%blockcount : blockcount), MPI_FLOAT, MPI_SUM, node_comm);
+      MPI_Allreduce(MPI_IN_PLACE, rbuf_h, ((lrank == 4) ? blockcount + count%blockcount : blockcount), mpi_type, mpi_op, node_comm);
       POP_RANGE
 
-      CUDACHECK(cudaMemcpyAsync(&rbuf[shift * blockcount], rbuf_h, ((lrank == 4) ? blockcount + count%blockcount : blockcount)*sizeof(float),
+      CUDACHECK(cudaMemcpyAsync(rbuf + (shift * blockcount)*typesize, rbuf_h, ((lrank == 4) ? blockcount + count%blockcount : blockcount)*typesize,
                   cudaMemcpyHostToDevice, stream));
       //cudaStreamSynchronize(stream);
     }
@@ -54,36 +59,38 @@ void hybridAllReduce(const float* sbuf, float* rbuf, size_t count, ncclComm_t nc
     //MPI_Barrier(node_comm);
 
     /* Bcast on node */
-    NCCLCHECK(ncclBcast(rbuf, blockcount, ncclFloat, 0, nccl_local_comm, stream));
-    NCCLCHECK(ncclBcast(&rbuf[1 * blockcount], blockcount, ncclFloat, 1, nccl_local_comm, stream));
-    NCCLCHECK(ncclBcast(&rbuf[2 * blockcount], blockcount, ncclFloat, 3, nccl_local_comm, stream));
-    NCCLCHECK(ncclBcast(&rbuf[3 * blockcount], blockcount + count%blockcount, ncclFloat, 4, nccl_local_comm, stream));
+    NCCLCHECK(ncclBcast(rbuf, blockcount, nccl_type, 0, nccl_local_comm, stream));
+    NCCLCHECK(ncclBcast(rbuf + (1 * blockcount)*typesize, blockcount, nccl_type, 1, nccl_local_comm, stream));
+    NCCLCHECK(ncclBcast(rbuf + (2 * blockcount)*typesize, blockcount, nccl_type, 3, nccl_local_comm, stream));
+    NCCLCHECK(ncclBcast(rbuf + (3 * blockcount)*typesize, blockcount + count%blockcount, nccl_type, 4, nccl_local_comm, stream));
   }
 }
 
-void hybridAllReduce_nosplit(const float* sbuf, float* rbuf, size_t count, ncclComm_t nccl_local_comm,
-  cudaStream_t stream, float* rbuf_h, MPI_Comm local_comm, MPI_Comm node_comm, int lrank, int nsize)
+void hybridAllReduce_nosplit(const void* sbuf, void* rbuf, size_t count, ncclDataType_t nccl_type, ncclRedOp_t nccl_op, ncclComm_t nccl_local_comm,
+  cudaStream_t stream, void* rbuf_h, MPI_Datatype mpi_type, MPI_Op mpi_op, MPI_Comm local_comm, MPI_Comm node_comm, int lrank, int nsize)
 {
 
   if (nsize > 1)
   {
     /* Reduce on node */
-    NCCLCHECK(ncclReduce(sbuf, rbuf, count, ncclFloat, ncclSum, 0, nccl_local_comm, stream));
+    NCCLCHECK(ncclReduce(sbuf, rbuf, count, nccl_type, nccl_op, 0, nccl_local_comm, stream));
 
     size_t blockcount = count;
 
     /* Intranode AllReduce using local rank 0*/
     if (lrank == 0)
     {
+      int typesize;
+      MPI_Type_size(mpi_type, &typesize);
 
-      CUDACHECK(cudaMemcpyAsync(rbuf_h, rbuf,  blockcount*sizeof(float), cudaMemcpyDeviceToHost, stream));
+      CUDACHECK(cudaMemcpyAsync(rbuf_h, rbuf,  blockcount*typesize, cudaMemcpyDeviceToHost, stream));
       cudaStreamSynchronize(stream);
 
       PUSH_RANGE("MPI_Allreduce", 0)
-      MPI_Allreduce(MPI_IN_PLACE, rbuf_h, blockcount, MPI_FLOAT, MPI_SUM, node_comm);
+      MPI_Allreduce(MPI_IN_PLACE, rbuf_h, blockcount, mpi_type, mpi_op, node_comm);
       POP_RANGE
 
-      CUDACHECK(cudaMemcpyAsync(rbuf, rbuf_h, blockcount*sizeof(float), cudaMemcpyHostToDevice, stream));
+      CUDACHECK(cudaMemcpyAsync(rbuf, rbuf_h, blockcount*typesize, cudaMemcpyHostToDevice, stream));
       //cudaStreamSynchronize(stream);
     }
 
@@ -91,28 +98,28 @@ void hybridAllReduce_nosplit(const float* sbuf, float* rbuf, size_t count, ncclC
     //MPI_Barrier(node_comm);
 
     /* Bcast on node */
-    NCCLCHECK(ncclBcast(rbuf, count, ncclFloat, 0, nccl_local_comm, stream));
+    NCCLCHECK(ncclBcast(rbuf, count, nccl_type, 0, nccl_local_comm, stream));
   }
   else
   {
     /* AllReduce on node */
-    NCCLCHECK(ncclAllReduce(sbuf, rbuf, count, ncclFloat, ncclSum, nccl_local_comm, stream));
+    NCCLCHECK(ncclAllReduce(sbuf, rbuf, count, nccl_type, nccl_op, nccl_local_comm, stream));
   }
 }
 
 #endif
 
-void hybridAllReduce_nosplit_cpu(const float* sbuf, float* rbuf, size_t count,
-    MPI_Comm local_comm, MPI_Comm node_comm, int lrank, int nsize)
+void hybridAllReduce_nosplit_cpu(const void* sbuf, void* rbuf, size_t count,
+    MPI_Datatype mpi_type, MPI_Op mpi_op, MPI_Comm local_comm, MPI_Comm node_comm, int lrank, int nsize)
 {
 
   if (nsize > 1)
   {
     /* Reduce on node */
     if (lrank == 0 and sbuf == rbuf)
-      MPI_Reduce(MPI_IN_PLACE, rbuf, count, MPI_FLOAT, MPI_SUM, 0, local_comm);
+      MPI_Reduce(MPI_IN_PLACE, rbuf, count, mpi_type, mpi_op, 0, local_comm);
     else
-      MPI_Reduce(sbuf, rbuf, count, MPI_FLOAT, MPI_SUM, 0, local_comm);
+      MPI_Reduce(sbuf, rbuf, count, mpi_type, mpi_op, 0, local_comm);
 
     size_t blockcount = count;
 
@@ -120,19 +127,19 @@ void hybridAllReduce_nosplit_cpu(const float* sbuf, float* rbuf, size_t count,
     if (lrank == 0)
     {
       PUSH_RANGE("MPI_Allreduce", 0)
-      MPI_Allreduce(MPI_IN_PLACE, rbuf, blockcount, MPI_FLOAT, MPI_SUM, node_comm);
+      MPI_Allreduce(MPI_IN_PLACE, rbuf, blockcount, mpi_type, mpi_op, node_comm);
       POP_RANGE
     }
 
     /* Bcast on node */
-    MPI_Bcast(rbuf, blockcount, MPI_FLOAT, 0, local_comm);
+    MPI_Bcast(rbuf, blockcount, mpi_type, 0, local_comm);
   }
   else
   {
     /* AllReduce on node */
     if (sbuf == rbuf)
-      MPI_Allreduce(MPI_IN_PLACE, rbuf, count, MPI_FLOAT, MPI_SUM, local_comm);
+      MPI_Allreduce(MPI_IN_PLACE, rbuf, count, mpi_type, mpi_op, local_comm);
     else
-      MPI_Allreduce(sbuf, rbuf, count, MPI_FLOAT, MPI_SUM, local_comm);
+      MPI_Allreduce(sbuf, rbuf, count, mpi_type, mpi_op, local_comm);
   }
 }
