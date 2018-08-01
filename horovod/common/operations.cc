@@ -158,7 +158,7 @@ struct HorovodGlobalState {
       tensor_fusion_buffers;
 //#ifdef USE_HYBRID_ALLREDUCE
   std::unordered_map<std::tuple<int, Framework>,
-                     float*>
+                     void*>
       tensor_fusion_buffers_h;
 //#endif
 
@@ -963,9 +963,11 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
           auto buffer_data_h = horovod_global.tensor_fusion_buffers_h[std::make_tuple(
               first_entry.device, first_entry.context->framework())];
 
-          hybridAllReduce((const float*)buffer_data, (float*)buffer_data, num_elements, nccl_comm,
-            stream, (float*)buffer_data_h, horovod_global.local_comm, horovod_global.node_comm,
-            horovod_global.local_rank, horovod_global.node_size);
+          hybridAllReduce((const void*)buffer_data, (void*)buffer_data, num_elements, 
+                          GetNCCLDataType(first_entry.tensor), ncclSum, nccl_comm,
+                          stream, (void*)buffer_data_h, GetMPIDataType(first_entry.tensor), 
+                          GetMPISumOp(first_entry.tensor), horovod_global.local_comm, horovod_global.node_comm,
+                          horovod_global.local_rank, horovod_global.node_size);
         }
 //#endif
         if (timeline.Initialized()) {
@@ -1000,9 +1002,12 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
           auto buffer_data_h = horovod_global.tensor_fusion_buffers_h[std::make_tuple(
               e.device, e.context->framework())];
 
-          hybridAllReduce((const float*)e.tensor->data(), (float*)e.output->data(),
-            (size_t)e.tensor->shape().num_elements(), nccl_comm, stream, (float*)buffer_data_h,
-            horovod_global.local_comm, horovod_global.node_comm, horovod_global.local_rank, horovod_global.node_size);
+          hybridAllReduce((const void*)e.tensor->data(), (void*)e.output->data(),
+                          (size_t)e.tensor->shape().num_elements(), 
+                          GetNCCLDataType(first_entry.tensor), ncclSum, nccl_comm, stream, 
+                          (void*)buffer_data_h, GetMPIDataType(first_entry.tensor), 
+                          GetMPISumOp(first_entry.tensor), horovod_global.local_comm, horovod_global.node_comm, 
+                          horovod_global.local_rank, horovod_global.node_size);
         }
 //#endif
         if (timeline.Initialized()) {
@@ -1134,9 +1139,11 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
                                 MPI_COMM_WORLD))
 //#else
       } else {
-       hybridAllReduce_nosplit_cpu((const float*)buffer_data, (float*)buffer_data,
-         (size_t)num_elements, horovod_global.local_comm_socket, horovod_global.node_comm_socket,
-         horovod_global.local_rank_socket, horovod_global.node_size_socket);
+       hybridAllReduce_nosplit_cpu((const void*)buffer_data, (void*)buffer_data,
+                                   (size_t)num_elements, GetMPIDataType(first_entry.tensor), 
+                                   GetMPISumOp(first_entry.tensor), horovod_global.local_comm_socket, 
+                                   horovod_global.node_comm_socket,
+                                   horovod_global.local_rank_socket, horovod_global.node_size_socket);
       }
 //#endif
       ACTIVITY_END_ALL(entries, timeline)
@@ -1185,13 +1192,15 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
                   MPI_Allreduce(sendbuf, (void*)e.output->data(),
                                 (int)e.tensor->shape().num_elements(),
                                 GetMPIDataType(e.tensor),
-                                GetMPISumOp(first_entry.tensor),
+                                GetMPISumOp(e.tensor),
                                 MPI_COMM_WORLD))
 //#else
      } else {
-       hybridAllReduce_nosplit_cpu((const float*)e.tensor->data(), (float*)e.output->data(),
-         (size_t)e.tensor->shape().num_elements(), horovod_global.local_comm_socket, horovod_global.node_comm_socket,
-         horovod_global.local_rank_socket, horovod_global.node_size_socket);
+       hybridAllReduce_nosplit_cpu((const void*)e.tensor->data(), (void*)e.output->data(),
+                                   (size_t)e.tensor->shape().num_elements(), GetMPIDataType(e.tensor), 
+                                   GetMPISumOp(e.tensor), horovod_global.local_comm_socket, 
+                                   horovod_global.node_comm_socket,
+                                   horovod_global.local_rank_socket, horovod_global.node_size_socket);
      }
 //#endif
       ACTIVITY_END_ALL(entries, timeline)
