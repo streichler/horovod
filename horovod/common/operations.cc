@@ -37,6 +37,7 @@
 
 //#ifdef USE_HYBRID_ALLREDUCE
 #include "hybrid_allreduce.h"
+#include "fp16add.h"
 //#endif
 
 #define OMPI_SKIP_MPICXX
@@ -557,6 +558,8 @@ ncclDataType_t GetNCCLDataType(const std::shared_ptr<Tensor> tensor) {
 // Custom reduction op for fp16 MPI_Allreduce.
 void fp16_sum_reduce(void* in, void* inout, int* len, MPI_Datatype *dtype) {
   // Not defined. Just a NO OP for now.
+  cpu_add((HALF *) in, (HALF *) inout, (size_t) *len);
+   
 }
 
 #define MPI_CHECK(entries, op_name, op)                                        \
