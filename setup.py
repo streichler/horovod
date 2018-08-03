@@ -47,7 +47,9 @@ def check_tf_version():
 
 def get_cpp_flags(build_ext):
     last_err = None
-    default_flags = ['-std=c++11', '-fPIC', '-O2']
+    #default_flags = ['-std=c++11', '-fPIC', '-O2']
+    default_flags = ['-std=c++11', '-fPIC', '-O2', '-maltivec', '-mcpu=power9', '-mtune=power9']
+
     if sys.platform == 'darwin':
         # Darwin most likely will have Clang, which has libc++.
         flags_to_try = [default_flags + ['-stdlib=libc++'], default_flags]
@@ -366,6 +368,7 @@ def get_common_options(build_ext):
     #if ("HOROVOD_HYBRID_ALLREDUCE" in os.environ):
     #    MACROS += [('USE_HYBRID_ALLREDUCE', '1')]
     SOURCES += ['horovod/common/hybrid_allreduce.cc']
+    SOURCES += ['horovod/common/fp16add.cc']
 
     if ("HOROVOD_NVTX" in os.environ):
         MACROS += [('USE_NVTX', '1')]
