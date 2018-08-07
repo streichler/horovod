@@ -48,7 +48,7 @@ def check_tf_version():
 def get_cpp_flags(build_ext):
     last_err = None
     #default_flags = ['-std=c++11', '-fPIC', '-O2']
-    default_flags = ['-std=c++11', '-fPIC', '-O2', '-maltivec', '-mcpu=power9', '-mtune=power9']
+    default_flags = ['-std=c++11', '-fPIC', '-O2', '-march=native']
 
     if sys.platform == 'darwin':
         # Darwin most likely will have Clang, which has libc++.
